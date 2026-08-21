@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.2.5";
+const PS_VERSION = "1.2.6";
  
 let PSLastOutfitBlocked = [];
  
@@ -907,6 +907,19 @@ function PSExportJSON() {
 		v: 1,
 		exportedAt: PSNow(),
 		scripts: PSStore.state.scripts,
+	});
+}
+
+ 
+function PSExportScriptJSON(id) {
+	if (!PSStore.state) return null;
+	const sc = PSStore.state.scripts.find((s) => s.id === id);
+	if (!sc) return null;
+	return JSON.stringify({
+		app: "PlayScript",
+		v: 1,
+		exportedAt: PSNow(),
+		scripts: [sc],
 	});
 }
 
@@ -2053,6 +2066,7 @@ const PSText = {
 		testRun: "手动触发",
 		stop: "停止演出",
 		exportBtn: "导出",
+		exportOneBtn: "导出本剧本",
 		importBtn: "导入",
 		clearAll: "清空",
 		clearAllConfirm: "确认清空",
@@ -2223,6 +2237,7 @@ const PSText = {
 		testRun: "Manual trigger",
 		stop: "Stop show",
 		exportBtn: "Export",
+		exportOneBtn: "Export this script",
 		importBtn: "Import",
 		clearAll: "Clear all",
 		clearAllConfirm: "Confirm clear",
@@ -3598,8 +3613,10 @@ function PSUIEditorBuild() {
 	bioHint.textContent = PST("cloudBioHint");
 	sec1.appendChild(bioHint);
 	const btnRow = PSEl("div", { display: "flex", gap: "8px", flexWrap: "wrap" });
+	const expOneBtn = PSSmallBtn(PST("exportOneBtn"), () => PSUIExportScript(sc.id));
 	const dupBtn = PSSmallBtn(PST("dupScript"), () => { const c = PSDuplicateScript(sc.id); if (c) { PSUI.selScriptId = c.id; PSUI.selNodeId = null; PSUI.selTrigger = false; PSUIRenderAll(); } });
 	const delBtn = PSSmallBtn(PST("delScript"), () => PSArm("delscript:" + sc.id, delBtn, PST("delScriptConfirm"), () => { PSDeleteScript(sc.id); PSUIRenderAll(); }), { bg: "#7a2c3a" });
+	btnRow.appendChild(expOneBtn);
 	btnRow.appendChild(dupBtn);
 	btnRow.appendChild(delBtn);
 	sec1.appendChild(btnRow);
@@ -4029,9 +4046,8 @@ function PSUIImportToggle() {
 
  
 
-function PSUIExport() {
-	let text;
-	try { text = PSExportJSON(); } catch (e) { PSErr("导出失败", e); PSToast(PST("toastExportFail")); return; }
+ 
+function PSUIExportDeliver(text, fileName) {
 	let copied = false;
 	try {
 		if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
@@ -4056,12 +4072,39 @@ function PSUIExport() {
 		const blob = new Blob([text], { type: "application/json" });
 		const a = document.createElement("a");
 		a.href = URL.createObjectURL(blob);
-		a.download = "PlayScript-backup-" + new Date().toISOString().slice(0, 10) + ".txt";
+		a.download = fileName;
 		document.body.appendChild(a);
 		a.click();
 		a.remove();
 	} catch (e) {   }
 	PSToast(copied ? PST("toastExported") : PST("toastExportFail"));
+}
+
+function PSUIExport() {
+	let text;
+	try { text = PSExportJSON(); } catch (e) { PSErr("导出失败", e); PSToast(PST("toastExportFail")); return; }
+	PSUIExportDeliver(text, "PlayScript-backup-" + new Date().toISOString().slice(0, 10) + ".txt");
+}
+
+ 
+function PSUIExportScript(id) {
+	const sc = PSFindScript(id);
+	if (!sc) { PSToast(PST("toastNoSelScript")); return; }
+	let text;
+	try { text = PSExportScriptJSON(id); } catch (e) { PSErr("导出失败", e); PSToast(PST("toastExportFail")); return; }
+	if (!text) { PSToast(PST("toastNoSelScript")); return; }
+	
+	let safeName = "";
+	const BAD_NAME_CHARS = '\\/:*?"<>| \t\n\r';
+	const rawName = String(sc.name || "script").slice(0, 40);
+	for (let i = 0; i < rawName.length; i++) {
+		const c = rawName[i];
+		safeName += (BAD_NAME_CHARS.indexOf(c) >= 0) ? "_" : c;
+	}
+	while (safeName.charAt(0) === "_") safeName = safeName.slice(1);
+	while (safeName.charAt(safeName.length - 1) === "_") safeName = safeName.slice(0, -1);
+	if (!safeName) safeName = "script";
+	PSUIExportDeliver(text, "PlayScript-" + safeName + "-" + new Date().toISOString().slice(0, 10) + ".txt");
 }
 
  
@@ -4210,6 +4253,7 @@ function PSExposeAPI() {
 			return { version: PS_VERSION, family, items };
 		},
 		Export: PSExportJSON,
+		ExportScript: PSExportScriptJSON,
 		Import: PSImportJSON,
 		Clear: PSClearAll,
 	};
@@ -4230,7 +4274,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSStore, PSStorage, PSNow, PSText, PST,
 		PSMatchText, PSMatchInfo, PSTriggerTargetOf, PSTriggerTargetAttempt, PSScriptUsesTarget, PSAddScript, PSDeleteScript, PSDuplicateScript, PSUpdateScript,
 		PSAddNode, PSDeleteNode, PSMoveNode, PSMoveNodeTo, PSUpdateNode,
-		PSExportJSON, PSImportJSON, PSClearAll,
+		PSExportJSON, PSExportScriptJSON, PSImportJSON, PSClearAll,
 		PSNormalizeText, PSNodeTextCap, PSNormalizeCode, PSSendChat, PSSendRp, PSSendNarr, PSSendAction, PSSendNode,
 		PSSendLeave, PSSendOutfit,
 		PSDecodeOutfitCode, PSApplyOutfit, PSOutfitClassOf, PSOutfitFlagsFromNode, PSOutfitClassAllowed, PSOutfitPrepareBundle,
@@ -4247,7 +4291,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSPreviewDrawChar, PSPreviewDrawZones,
 		PSUIOutfitWinOpen, PSUIOutfitWinClose, PSUIOutfitToggle, PSUIOutfitAll, PSUIOutfitNone, PSUIOutfitWinRender,
 		PSUI, PSUIRenderAll, PSUIRenderStatus, PSUIListBuild, PSUIFlowBuild, PSUIEditorBuild,
-		PSUIDotBuild, PSToast, PSUINodePreview, PSUIWinClamp,
+		PSUIDotBuild, PSToast, PSUINodePreview, PSUIWinClamp, PSUIExport, PSUIExportScript,
 		PlayScriptOpen, PlayScriptClose, PlayScriptToggle,
 		PSVersion: () => PS_VERSION, PSLastOutfitBlocked: () => PSLastOutfitBlocked.slice(), PSLastOutfitCleared: () => PSLastOutfitCleared.slice(),
 		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
