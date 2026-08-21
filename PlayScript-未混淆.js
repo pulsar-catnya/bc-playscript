@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.2.6";
+const PS_VERSION = "1.2.7";
  
 let PSLastOutfitBlocked = [];
  
@@ -312,19 +312,40 @@ const PSStore = {
 				}
 			}
 			
-			const bioScripts = PSBioUnpack((typeof Player !== "undefined" && Player && typeof Player.Description === "string") ? Player.Description : "");
-			if (bioScripts && bioScripts.length) {
-				const norm = this.normalize({ v: 1, scripts: bioScripts }).scripts;
-				const byId = {};
-				this.state.scripts.forEach((s) => { byId[s.id] = s; });
-				for (const s of norm) {
-					s.cloudBio = true;
-					if (byId[s.id]) Object.assign(byId[s.id], s);
-					else if (this.state.scripts.length < PS_MAX_SCRIPTS) this.state.scripts.push(s);
-				}
-			}
+			this.mergeBio(num);
 			this.save();
 		}
+	},
+
+	
+
+ 
+	mergeBio(num) {
+		try {
+			if (!Number.isInteger(num) || num <= 0 || !this.state) return 0;
+			if (typeof Player === "undefined" || !Player) return 0;
+			
+			if (!Number.isInteger(Player.MemberNumber) || Player.MemberNumber !== num) return 0;
+			if (typeof Player.Description !== "string") return 0;
+			const bioScripts = PSBioUnpack(Player.Description);
+			if (!bioScripts || !bioScripts.length) {
+				
+				if (Player.Description.indexOf(PS_BIO_START) >= 0) {
+					PSErr("BIO 备份：玩家描述里有 BCPS 数据块但解析失败（可能是旧版本数据、块被截断或被改动）");
+				}
+				return 0;
+			}
+			const norm = this.normalize({ v: 1, scripts: bioScripts }).scripts;
+			const byId = {};
+			this.state.scripts.forEach((s) => { byId[s.id] = s; });
+			let merged = 0;
+			for (const s of norm) {
+				s.cloudBio = true;
+				if (byId[s.id]) { Object.assign(byId[s.id], s); merged++; }
+				else if (this.state.scripts.length < PS_MAX_SCRIPTS) { this.state.scripts.push(s); merged++; }
+			}
+			return merged;
+		} catch (e) { return 0; }
 	},
 
 	 
@@ -1950,7 +1971,17 @@ function PSInstallHooks(mod) {
 					try { cloudState = PSStore.normalize(PSStore.decode(C[PSStore.cloudKey])); }
 					catch (e) { cloudState = null; }
 				}
+				
+				
+				const wasBound = (PSStore.accountNum === Player.MemberNumber);
 				PSStore.ensureAccount(Player.MemberNumber, cloudState);
+				if (wasBound) {
+					const merged = PSStore.mergeBio(Player.MemberNumber);
+					if (merged > 0) {
+						PSStore.save();
+						PSLog("BIO 备份：从玩家描述读回", merged, "个剧本");
+					}
+				}
 				if (PSUI.open) PSUIRenderAll();
 				PSToast(PST("toastDataLoaded", PSStore.state ? PSStore.state.scripts.length : 0));
 			}
