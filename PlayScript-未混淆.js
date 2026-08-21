@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.2.3";
+const PS_VERSION = "1.2.4";
  
 let PSLastOutfitBlocked = [];
  
@@ -537,8 +537,26 @@ function PSByteToKB(nByte) {
 }
 
  
+function PSCloudLimit() {
+	try {
+		if (typeof ServerSocket !== "undefined" && ServerSocket && ServerSocket.io) {
+			const eng = ServerSocket.io.engine;
+			if (eng) {
+				const raw = eng._maxPayload
+					?? (eng.opts && eng.opts.maxPayload)
+					?? (eng.transport && eng.transport.opts && eng.transport.opts.maxPayload);
+				const n = Number(raw);
+				if (isFinite(n) && n > 0) return n;
+			}
+		}
+	} catch (e) {   }
+	return PS_CLOUD_TOTAL_LIMIT;
+}
+
+ 
 function PSCloudInfo() {
 	const snap = PSStore.lastAccountSnapshot || { total: null, self: null, keys: null };
+	const limit = PSCloudLimit();
 	let extensionChars = 0, extensionBytes = 0;
 	try {
 		const es = (typeof Player !== "undefined" && Player && typeof Player.ExtensionSettings === "object" && Player.ExtensionSettings) ? Player.ExtensionSettings : {};
@@ -547,9 +565,9 @@ function PSCloudInfo() {
 		extensionBytes = PSUTF8Bytes(json);
 	} catch (e) {   }
 	return {
-		limit: PS_CLOUD_TOTAL_LIMIT,
+		limit,
 		used: snap.total,
-		available: (snap.total == null) ? null : Math.max(0, PS_CLOUD_TOTAL_LIMIT - snap.total),
+		available: (snap.total == null) ? null : Math.max(0, limit - snap.total),
 		self: snap.self ?? 0,
 		capKB: PSStore.cloudCapKB(),
 		keys: snap.keys,
@@ -2139,7 +2157,7 @@ const PSText = {
 		bioTooBig: "BIO 备份放不下（玩家描述上限 10000 字符）：勾选的剧本太多，请减少勾选「在线备份存储」的剧本",
 		cloudCapLabel: "在线备份上限（KB，0=不限）",
 		cloudCheckBtn: "在线存储空间",
-		cloudInfo: "在线存储：账号数据共 {0}K / 上限 180K，可用 {1}K；本插件占用 {2}K（上限 {3}K）；ExtensionSettings {4}K",
+		cloudInfo: "在线存储：账号数据共 {0}K / 上限 {5}K，可用 {1}K；本插件占用 {2}K（上限 {3}K）；ExtensionSettings {4}K",
 		cloudInfoNone: "在线存储：暂未收到登录账号数据（登录后重试）；本插件上限 {0}K",
 		cloudBioLabel: "在线备份存储（编码存 BIO，不进默认在线存储）",
 		cloudBioHint: "勾选后该剧本会以编码形式存进玩家描述（BIO，上限 10000 字符），不再占用默认在线存储空间；换电脑登录自动恢复",
@@ -2309,7 +2327,7 @@ const PSText = {
 		bioTooBig: "BIO backup doesn't fit (profile description limit 10000 chars): too many scripts with \"online backup\" checked — uncheck some",
 		cloudCapLabel: "Online backup cap (KB, 0=unlimited)",
 		cloudCheckBtn: "Online storage",
-		cloudInfo: "Online storage: account data {0}K / 180K limit, {1}K available; this plugin uses {2}K (cap {3}K); ExtensionSettings {4}K",
+		cloudInfo: "Online storage: account data {0}K / {5}K limit, {1}K available; this plugin uses {2}K (cap {3}K); ExtensionSettings {4}K",
 		cloudInfoNone: "Online storage: no account data received yet (try after login); this plugin's cap is {0}K",
 		cloudBioLabel: "Online backup (encoded into BIO, not in default online storage)",
 		cloudBioHint: "When checked, this script is stored encoded in your profile description (BIO, 10000 char limit) instead of the default online storage; it is restored automatically after login on another computer",
@@ -2654,7 +2672,7 @@ function PSUIRoot() {
 	PSUI.btnCloud = PSBigBtn(PST("cloudCheckBtn"), () => {
 		const info = PSCloudInfo();
 		if (info.used == null) { PSToast(PST("cloudInfoNone", info.capKB)); return; }
-		PSToast(PST("cloudInfo", PSByteToKB(info.used), PSByteToKB(info.available), PSByteToKB(info.self), info.capKB, PSByteToKB(info.extensionBytes)));
+		PSToast(PST("cloudInfo", PSByteToKB(info.used), PSByteToKB(info.available), PSByteToKB(info.self), info.capKB, PSByteToKB(info.extensionBytes), PSByteToKB(info.limit)));
 		try { console.log("[PlayScript] 在线存储（与 MBS 同口径）:", JSON.stringify(info)); } catch (e) {   }
 	});
 	bar.appendChild(PSUI.btnCloud);
@@ -4147,6 +4165,7 @@ function PSExposeAPI() {
 		StorageInfo: PSStorageInfo,
 		CleanLSCGBackups: PSCleanLSCGBackups,
 		CloudInfo: PSCloudInfo,
+		CloudLimit: PSCloudLimit,
 		
 		DebugOutfit: (code) => {
 			const bundle = PSDecodeOutfitCode(PSNormalizeCode(code));
@@ -4204,7 +4223,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSUIDotBuild, PSToast, PSUINodePreview, PSUIWinClamp,
 		PlayScriptOpen, PlayScriptClose, PlayScriptToggle,
 		PSVersion: () => PS_VERSION, PSLastOutfitBlocked: () => PSLastOutfitBlocked.slice(), PSLastOutfitCleared: () => PSLastOutfitCleared.slice(),
-		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
+		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
 		PSDebugOutfit: (code) => {
 			const bundle = PSDecodeOutfitCode(PSNormalizeCode(code));
 			if (!bundle) return { version: PS_VERSION, error: "decode-failed" };
