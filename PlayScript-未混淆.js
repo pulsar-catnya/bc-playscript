@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.2.8";
+const PS_VERSION = "1.2.9";
  
 let PSLastOutfitBlocked = [];
  
@@ -163,6 +163,7 @@ const PSStore = {
 	lastWarnAt: null,
 	lastCloudWarnAt: null,
 	lastBioWarnAt: null,
+	lastBioHoldWarnAt: null,
 	lastAccountSnapshot: null,     
 	lastLoginData: null,           
 
@@ -340,8 +341,14 @@ const PSStore = {
 			this.state.scripts.forEach((s) => { byId[s.id] = s; });
 			let merged = 0;
 			for (const s of norm) {
+				const existing = byId[s.id];
+				if (existing && existing.cloudBio === false) {
+					
+					
+					continue;
+				}
 				s.cloudBio = true;
-				if (byId[s.id]) { Object.assign(byId[s.id], s); merged++; }
+				if (existing) { Object.assign(existing, s); merged++; }
 				else if (this.state.scripts.length < PS_MAX_SCRIPTS) { this.state.scripts.push(s); merged++; }
 			}
 			return merged;
@@ -366,24 +373,27 @@ const PSStore = {
 		const payload = this.encode({ v: 1, scripts: normalScripts, ui: this.state.ui, cloudCapKB: this.state.cloudCapKB });
 		const ok = PSStorage.set(key, payload);
 		if (!ok) this.warnQuota();
-		this.saveCloud(payload);
-		this.saveBio();
+		const cloudAccepted = this.saveCloud(payload);
+		this.saveBio(cloudAccepted);
 		return ok;
 	},
 
 	
+
  
 	saveCloud(payload) {
 		try {
 			if (typeof ServerAccountUpdate === "undefined" || !ServerAccountUpdate ||
-				typeof ServerAccountUpdate.QueueData !== "function") return;
-			if (typeof payload !== "string") return;
+				typeof ServerAccountUpdate.QueueData !== "function") return false;
+			if (typeof payload !== "string") return false;
 			const capKB = this.cloudCapKB();
-			if (capKB > 0 && PSUTF8Bytes(payload) > capKB * 1024) { this.warnCloudSize(payload, capKB); return; }
+			if (capKB > 0 && PSUTF8Bytes(payload) > capKB * 1024) { this.warnCloudSize(payload, capKB); return false; }
+			if (typeof Player === "undefined" || !Player || typeof Player.CharacterID !== "string" || Player.CharacterID === "") return false;
 			const obj = {};
 			obj[this.cloudKey] = payload;
 			ServerAccountUpdate.QueueData(obj);
-		} catch (e) {   }
+			return true;
+		} catch (e) {   return false; }
 	},
 
 	 
@@ -395,47 +405,75 @@ const PSStore = {
 	
 
  
-	saveBio() {
+	saveBio(cloudAccepted) {
 		try {
 			if (typeof Player === "undefined" || !Player) return;
 			if (typeof ServerAccountUpdate === "undefined" || !ServerAccountUpdate || typeof ServerAccountUpdate.QueueData !== "function") return;
 			if (typeof LZString === "undefined" || !LZString || typeof LZString.compressToUTF16 !== "function") return;
 			const scripts = (this.state && Array.isArray(this.state.scripts)) ? this.state.scripts.filter((s) => s && s.cloudBio) : [];
-			const pack = PSBioPack(scripts);
-			if (!pack) return;   
 			const cur = (typeof Player.Description === "string") ? Player.Description : "";
-			const block = PS_BIO_START + "\n" + pack + "\n" + PS_BIO_END;
-			let next;
+			
+			
+			const oldBio = PSBioUnpack(cur) || [];
+			const removed = oldBio.filter((s) => s && s.id && !scripts.some((x) => x.id === s.id));
+			if (removed.length && !cloudAccepted) {
+				for (const s of removed) scripts.push(s);
+				this.warnBioUncheckHold();
+			}
+			const pack = PSBioPack(scripts);
 			const b = PSBioBlockBounds(cur);
-			if (b && b.packIdx >= 0 && b.endIdx >= 0) {
+			let next = null;
+			if (pack) {
+				const block = PS_BIO_START + "\n" + pack + "\n" + PS_BIO_END;
+				if (b && b.packIdx >= 0 && b.endIdx >= 0) {
+					
+					
+					const before = cur.slice(0, b.startIdx).trimEnd();
+					const after = cur.slice(b.endIdx + PS_BIO_END.length).trimStart();
+					next = (before ? before + "\n" : "") + block + (after ? "\n" + after : "");
+				} else if (b) {
+					
+					const base = cur.trimEnd();
+					next = (base ? base + "\n" : "") + block;
+				} else {
+					
+					
+					
+					const mIdx = cur.indexOf(PS_BIO_MARK);
+					let base = cur;
+					if (mIdx >= 0) {
+						const rest = cur.slice(mIdx + PS_BIO_MARK.length);
+						const tok = rest.trim().split(/\s+/)[0] || "";
+						if (/^[A-Za-z0-9+/=]{8,}$/.test(tok)) {
+							const tokIdx = rest.indexOf(tok);
+							const beforePart = cur.slice(0, mIdx).trimEnd();
+							const afterPart = (tokIdx >= 0 ? rest.slice(tokIdx + tok.length) : rest).trimStart();
+							base = beforePart + (beforePart && afterPart ? "\n" : "") + afterPart;
+						}
+					}
+					const trimmed = base.trimEnd();
+					next = (trimmed ? trimmed + "\n" : "") + block;
+				}
+			} else if (cloudAccepted) {
 				
 				
-				const before = cur.slice(0, b.startIdx).trimEnd();
-				const after = cur.slice(b.endIdx + PS_BIO_END.length).trimStart();
-				next = (before ? before + "\n" : "") + block + (after ? "\n" + after : "");
-			} else if (b) {
-				
-				const base = cur.trimEnd();
-				next = (base ? base + "\n" : "") + block;
-			} else {
-				
-				
-				
-				const mIdx = cur.indexOf(PS_BIO_MARK);
-				let base = cur;
-				if (mIdx >= 0) {
+				if (b && b.packIdx >= 0 && b.endIdx >= 0) {
+					const before = cur.slice(0, b.startIdx).trimEnd();
+					const after = cur.slice(b.endIdx + PS_BIO_END.length).trimStart();
+					next = before + (before && after ? "\n" : "") + after;
+				} else {
+					const mIdx = cur.indexOf(PS_BIO_MARK);
+					if (mIdx < 0) return;   
 					const rest = cur.slice(mIdx + PS_BIO_MARK.length);
 					const tok = rest.trim().split(/\s+/)[0] || "";
-					if (/^[A-Za-z0-9+/=]{8,}$/.test(tok)) {
-						const tokIdx = rest.indexOf(tok);
-						const beforePart = cur.slice(0, mIdx).trimEnd();
-						const afterPart = (tokIdx >= 0 ? rest.slice(tokIdx + tok.length) : rest).trimStart();
-						base = beforePart + (beforePart && afterPart ? "\n" : "") + afterPart;
-					}
+					if (!/^[A-Za-z0-9+/=]{8,}$/.test(tok)) return;   
+					const tokIdx = rest.indexOf(tok);
+					const beforePart = cur.slice(0, mIdx).trimEnd();
+					const afterPart = (tokIdx >= 0 ? rest.slice(tokIdx + tok.length) : rest).trimStart();
+					next = beforePart + (beforePart && afterPart ? "\n" : "") + afterPart;
 				}
-				const trimmed = base.trimEnd();
-				next = (trimmed ? trimmed + "\n" : "") + block;
 			}
+			if (next == null) return;   
 			if (next.length > PS_BIO_MAX) { this.warnBioTooBig(); return; }
 			
 			
@@ -458,6 +496,14 @@ const PSStore = {
 		if (this.lastBioWarnAt && now - this.lastBioWarnAt < 30000) return;
 		this.lastBioWarnAt = now;
 		try { PSToast(PST("bioTooBig")); } catch (e) {   }
+	},
+
+	 
+	warnBioUncheckHold() {
+		const now = PSNow();
+		if (this.lastBioHoldWarnAt && now - this.lastBioHoldWarnAt < 30000) return;
+		this.lastBioHoldWarnAt = now;
+		try { PSToast(PST("bioUncheckHold")); } catch (e) {   }
 	},
 
 	 
@@ -2256,7 +2302,8 @@ const PSText = {
 		cloudInfo: "在线存储：账号数据共 {0}K / 上限 {5}K，可用 {1}K；本插件占用 {2}K（上限 {3}K）；ExtensionSettings {4}K",
 		cloudInfoNone: "在线存储：暂未收到登录账号数据（登录后重试）；本插件上限 {0}K",
 		cloudBioLabel: "在线备份存储（编码存 BIO，不进默认在线存储）",
-		cloudBioHint: "勾选后该剧本会以编码形式存进玩家描述（BIO，上限 10000 字符），不再占用默认在线存储空间；换电脑登录自动恢复",
+		cloudBioHint: "勾选后该剧本会以编码形式存进玩家描述（BIO，上限 10000 字符），不再占用默认在线存储空间；和存进在线存储空间里的剧本一样不会因为换设备登录而丢失。取消勾选时，剧本确认存进在线存储空间后才会从 BIO 里删掉",
+		bioUncheckHold: "云端未确认（未登录或超上限）：刚取消勾选的剧本暂留在 BIO，确认存进在线存储空间后会自动移出",
 		toastAborted: "⏹ 演出已中止：「{0}」",
 		toastAbortRoom: "已离开聊天室，演出中止",
 		toastBusy: "演出进行中，本次触发已忽略（剧本设置里可改成排队/重新开始）",
@@ -2427,7 +2474,8 @@ const PSText = {
 		cloudInfo: "Online storage: account data {0}K / {5}K limit, {1}K available; this plugin uses {2}K (cap {3}K); ExtensionSettings {4}K",
 		cloudInfoNone: "Online storage: no account data received yet (try after login); this plugin's cap is {0}K",
 		cloudBioLabel: "Online backup (encoded into BIO, not in default online storage)",
-		cloudBioHint: "When checked, this script is stored encoded in your profile description (BIO, 10000 char limit) instead of the default online storage; it is restored automatically after login on another computer",
+		cloudBioHint: "When checked, this script is stored encoded in your profile description (BIO, 10000 char limit) instead of the default online storage; like scripts in the online storage, it won't be lost when logging in on another device. When unchecked, it is removed from the BIO only after it is confirmed saved to the online storage",
+		bioUncheckHold: "Cloud not confirmed (not logged in or over the cap): the just-unchecked scripts stay in the BIO and will be removed automatically once confirmed in the online storage",
 		toastAborted: "⏹ Aborted: {0}",
 		toastAbortRoom: "Left the chat room, show aborted",
 		toastBusy: "A show is running, trigger ignored (set Queue/Restart in script settings)",
