@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.2.7";
+const PS_VERSION = "1.2.8";
  
 let PSLastOutfitBlocked = [];
  
@@ -406,21 +406,17 @@ const PSStore = {
 			const cur = (typeof Player.Description === "string") ? Player.Description : "";
 			const block = PS_BIO_START + "\n" + pack + "\n" + PS_BIO_END;
 			let next;
-			const startIdx = cur.indexOf(PS_BIO_START);
-			if (startIdx >= 0) {
+			const b = PSBioBlockBounds(cur);
+			if (b && b.packIdx >= 0 && b.endIdx >= 0) {
 				
 				
-				const lineEnd = cur.indexOf("\n", startIdx);
-				const endIdx = (lineEnd >= 0) ? cur.indexOf(PS_BIO_END, lineEnd + 1) : -1;
-				if (endIdx >= 0) {
-					const before = cur.slice(0, startIdx).trimEnd();
-					const after = cur.slice(endIdx + PS_BIO_END.length).trimStart();
-					next = (before ? before + "\n" : "") + block + (after ? "\n" + after : "");
-				} else {
-					
-					const base = cur.trimEnd();
-					next = (base ? base + "\n" : "") + block;
-				}
+				const before = cur.slice(0, b.startIdx).trimEnd();
+				const after = cur.slice(b.endIdx + PS_BIO_END.length).trimStart();
+				next = (before ? before + "\n" : "") + block + (after ? "\n" + after : "");
+			} else if (b) {
+				
+				const base = cur.trimEnd();
+				next = (base ? base + "\n" : "") + block;
 			} else {
 				
 				
@@ -441,6 +437,14 @@ const PSStore = {
 				next = (trimmed ? trimmed + "\n" : "") + block;
 			}
 			if (next.length > PS_BIO_MAX) { this.warnBioTooBig(); return; }
+			
+			
+			
+			try {
+				if (typeof Player.CharacterID === "string" && Player.CharacterID !== "") {
+					Player.Description = next;
+				}
+			} catch (e) {   }
 			
 			const comp = String.fromCharCode(9580) + LZString.compressToUTF16(next);
 			const payload = (comp.length < next.length || next.startsWith(String.fromCharCode(9580))) ? comp : next;
@@ -485,18 +489,33 @@ function PSBioPack(scripts) {
 }
 
  
+function PSBioBlockBounds(desc) {
+	try {
+		if (typeof desc !== "string") return null;
+		const startIdx = desc.indexOf(PS_BIO_START);
+		if (startIdx < 0) return null;
+		const rest = desc.slice(startIdx + PS_BIO_START.length);
+		let skip = 0;
+		if (rest.startsWith("\r\n")) skip = 2;
+		else if (rest.startsWith("\n")) skip = 1;
+		else if (rest.startsWith("\\r\\n")) skip = 4;
+		else if (rest.startsWith("\\n")) skip = 2;
+		if (!skip) return { startIdx, packIdx: -1, endIdx: -1 };
+		const packIdx = startIdx + PS_BIO_START.length + skip;
+		const endIdx = desc.indexOf(PS_BIO_END, packIdx);
+		return { startIdx, packIdx, endIdx };
+	} catch (e) { return null; }
+}
+
+ 
 function PSBioUnpack(desc) {
 	try {
 		if (typeof desc !== "string") return null;
 		let section = null;
-		const startIdx = desc.indexOf(PS_BIO_START);
-		if (startIdx >= 0) {
+		const b = PSBioBlockBounds(desc);
+		if (b && b.packIdx >= 0 && b.endIdx >= 0) {
 			
-			const lineEnd = desc.indexOf("\n", startIdx);
-			if (lineEnd >= 0) {
-				const endIdx = desc.indexOf(PS_BIO_END, lineEnd + 1);
-				section = (endIdx >= 0) ? desc.slice(lineEnd + 1, endIdx) : desc.slice(lineEnd + 1);
-			}
+			section = desc.slice(b.packIdx, b.endIdx);
 		}
 		if (section == null) {
 			
@@ -504,7 +523,12 @@ function PSBioUnpack(desc) {
 			if (idx < 0) return null;
 			section = desc.slice(idx);
 		}
-		const encoded = section.slice(section.indexOf(PS_BIO_MARK) + PS_BIO_MARK.length).trim().split(/\s+/)[0];
+		const mIdx = section.indexOf(PS_BIO_MARK);
+		if (mIdx < 0) return null;
+		let encoded = section.slice(mIdx + PS_BIO_MARK.length).trim().split(/\s+/)[0] || "";
+		
+		while (encoded.startsWith("\\n")) encoded = encoded.slice(2);
+		while (encoded.endsWith("\\n")) encoded = encoded.slice(0, -2);
 		if (!encoded) return null;
 		const dec = PSDeobfuscate(encoded);
 		if (typeof LZString === "undefined" || !LZString || typeof LZString.decompressFromUTF16 !== "function") return null;
@@ -4325,7 +4349,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSUIDotBuild, PSToast, PSUINodePreview, PSUIWinClamp, PSUIExport, PSUIExportScript,
 		PlayScriptOpen, PlayScriptClose, PlayScriptToggle,
 		PSVersion: () => PS_VERSION, PSLastOutfitBlocked: () => PSLastOutfitBlocked.slice(), PSLastOutfitCleared: () => PSLastOutfitCleared.slice(),
-		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
+		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
 		PSDebugOutfit: (code) => {
 			const bundle = PSDecodeOutfitCode(PSNormalizeCode(code));
 			if (!bundle) return { version: PS_VERSION, error: "decode-failed" };
