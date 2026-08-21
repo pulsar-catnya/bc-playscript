@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.2.4";
+const PS_VERSION = "1.2.5";
  
 let PSLastOutfitBlocked = [];
  
@@ -164,6 +164,7 @@ const PSStore = {
 	lastCloudWarnAt: null,
 	lastBioWarnAt: null,
 	lastAccountSnapshot: null,     
+	lastLoginData: null,           
 
 	 
 	baseKey() {
@@ -555,7 +556,23 @@ function PSCloudLimit() {
 
  
 function PSCloudInfo() {
-	const snap = PSStore.lastAccountSnapshot || { total: null, self: null, keys: null };
+	let snap = PSStore.lastAccountSnapshot;
+	if (!snap && PSStore.lastLoginData) {
+		
+		try {
+			const keys = PSMeasureDataSize(PSStore.lastLoginData);
+			let total = 0, selfBytes = 0;
+			for (const k of Object.keys(keys)) {
+				const b = keys[k];
+				if (!isNaN(b)) {
+					total += b;
+					if (k === PSStore.cloudKey) selfBytes = b;
+				}
+			}
+			snap = PSStore.lastAccountSnapshot = { total, self: selfBytes, keys };
+		} catch (e) { snap = null; }
+	}
+	if (!snap) snap = { total: null, self: null, keys: null };
 	const limit = PSCloudLimit();
 	let extensionChars = 0, extensionBytes = 0;
 	try {
@@ -1733,24 +1750,22 @@ function PSActEntriesFor(C) {
 
  
 function PSInstallActivityButtonHook(mod) {
-	try {
-		mod.hookFunction("ElementButton.CreateForActivity", 10, (args, next) => {
-			const activity = args[1];
-			if (activity && activity.__psCustom) {
-				const labelText = String(activity.__psLabel || "PlayScript");
-				const options = (args[4] = args[4] || {});
-				options.label = "▶ " + labelText;
-				options.image = null;   
-				options.tooltip = [labelText];
-				const htmlOptions = (args[5] = args[5] || {});
-				htmlOptions.label = Object.assign({}, htmlOptions.label);
-				htmlOptions.label.style = Object.assign({}, (htmlOptions.label && htmlOptions.label.style), {
-					color: "#2ec4b6", fontWeight: "700",
-				});
-			}
-			return next(args);
-		});
-	} catch (e) { PSErr("hook ElementButton.CreateForActivity 失败", e); }
+	PSHookWhen(mod, "ElementButton.CreateForActivity", 10, (args, next) => {
+		const activity = args[1];
+		if (activity && activity.__psCustom) {
+			const labelText = String(activity.__psLabel || "PlayScript");
+			const options = (args[4] = args[4] || {});
+			options.label = "▶ " + labelText;
+			options.image = null;   
+			options.tooltip = [labelText];
+			const htmlOptions = (args[5] = args[5] || {});
+			htmlOptions.label = Object.assign({}, htmlOptions.label);
+			htmlOptions.label.style = Object.assign({}, (htmlOptions.label && htmlOptions.label.style), {
+				color: "#2ec4b6", fontWeight: "700",
+			});
+		}
+		return next(args);
+	});
 }
 
  
@@ -1766,208 +1781,220 @@ function PSInputClear(input) {
 	}
 }
 
+ 
+function PSHookWhen(mod, name, prio, hook) {
+	const attempt = () => {
+		try {
+			mod.hookFunction(name, prio, hook);
+			return "ok";
+		} catch (e) {
+			const msg = (e && e.message) ? String(e.message) : "";
+			
+			return (msg.indexOf("not found") >= 0 || msg.indexOf("is not object") >= 0) ? "wait" : e;
+		}
+	};
+	const first = attempt();
+	if (first === "ok") return;
+	if (first !== "wait") { PSErr("hook " + name + " 失败", first); return; }
+	const startAt = PSNow();
+	const timer = setInterval(() => {
+		const r = attempt();
+		if (r === "ok") { clearInterval(timer); return; }
+		if (r !== "wait") { clearInterval(timer); PSErr("hook " + name + " 失败", r); return; }
+		if (PSNow() - startAt > 120000) {
+			clearInterval(timer);
+			PSErr("hook " + name + " 失败：2 分钟内目标函数未出现");
+		}
+	}, 300);
+}
+
 function PSInstallHooks(mod) {
 	const safe = (fn) => (...args) => {
 		try { return fn(...args); } catch (e) { PSErr(e); }
 	};
 
 	
-	try {
-		mod.hookFunction("ChatRoomSendChat", 10, (args, next) => {
-			if (typeof document !== "undefined") {
-				const input = document.getElementById("InputChat");
-				const raw = input ? input.value : "";
-				const t = (raw || "").trim().toLowerCase();
-				if (t === "/ps" || t === "/play" || t === "/剧本" || t === "/演出") {
-					PSInputClear(input);
-					safe(PlayScriptToggle)();
-					return;
-				}
-				const res = next(args);
-				safe(() => {
-					if (typeof Player !== "undefined" && Player) PSStore.ensureAccount(Player.MemberNumber);
-					const txt = (raw || "").trim();
-					if (txt) PSTriggerFromText(txt, null);
-				})();
-				return res;
-			}
-			return next(args);
-		});
-	} catch (e) { PSErr("hook ChatRoomSendChat 失败", e); }
-
-	
-	try {
-		mod.hookFunction("ChatRoomMessage", 10, (args, next) => {
-			const res = next(args);
-			safe(() => {
-				const data = args[0];
-				if (!data || typeof data.Sender !== "number") return;
-				if (typeof Player !== "undefined" && Player && data.Sender === Player.MemberNumber) return;
-				if (data.Type !== "Chat" && data.Type !== "Whisper" && data.Type !== "Emote") return;
-				const txt = data.Content;
-				if (txt && String(txt).trim()) PSTriggerFromText(String(txt), data.Sender);
-			})();
-			return res;
-		});
-	} catch (e) { PSErr("hook ChatRoomMessage 失败", e); }
-
-	
-	try {
-		mod.hookFunction("ChatRoomLeave", 10, (args, next) => {
-			const res = next(args);
-			safe(() => {
-				
-				if (PSActive) PSAbortCore(PSLeaveNodeActive === true, "noroom");
-				if (PSQueue.length) PSQueue = [];
-			})();
-			return res;
-		});
-	} catch (e) { PSErr("hook ChatRoomLeave 失败", e); }
-
-	
-	
-	try {
-		mod.hookFunction("ActivityAllowedForGroup", 10, (args, next) => {
-			const res = next(args);
-			safe(() => {
-				const C = args[0];
-				const entries = PSActEntriesFor(C);
-				if (entries.length && Array.isArray(res)) {
-					PSLog("动作面板注入", entries.length, "条（部位:", C && C.FocusGroup && C.FocusGroup.Name, "）");
-					for (const e of entries) res.push(e);
-				}
-			})();
-			return res;
-		});
-	} catch (e) { PSErr("hook ActivityAllowedForGroup 失败", e); }
-
-	
-	
-	try {
-		mod.hookFunction("DialogActivityClick", 10, (args, next) => {
-			const C = args[0];
-			const clicked = args[1];
-			if (clicked && clicked.__psCustom && clicked.__psScriptId) {
-				safe(() => {
-					const sc = PSFindScript(clicked.__psScriptId);
-					if (sc) {
-						PSLog("动作触发：", sc.name, "目标：", C && C.Name);
-						PSFire(sc.id, {
-							manual: true,
-							senderNum: (typeof Player !== "undefined" && Player) ? Player.MemberNumber : null,
-							targetNum: (C && typeof C.MemberNumber === "number") ? C.MemberNumber : null,
-						});
-						
-						try {
-							if (typeof DialogLeave === "function" &&
-								typeof CurrentScreen !== "undefined" && CurrentScreen === "ChatRoom") {
-								DialogLeave();
-							}
-						} catch (e) {   }
-					}
-				})();
+	PSHookWhen(mod, "ChatRoomSendChat", 10, (args, next) => {
+		if (typeof document !== "undefined") {
+			const input = document.getElementById("InputChat");
+			const raw = input ? input.value : "";
+			const t = (raw || "").trim().toLowerCase();
+			if (t === "/ps" || t === "/play" || t === "/剧本" || t === "/演出") {
+				PSInputClear(input);
+				safe(PlayScriptToggle)();
 				return;
 			}
-			return next(args);
-		});
-	} catch (e) { PSErr("hook DialogActivityClick 失败", e); }
+			const res = next(args);
+			safe(() => {
+				if (typeof Player !== "undefined" && Player) PSStore.ensureAccount(Player.MemberNumber);
+				const txt = (raw || "").trim();
+				if (txt) PSTriggerFromText(txt, null);
+			})();
+			return res;
+		}
+		return next(args);
+	});
+
+	
+	PSHookWhen(mod, "ChatRoomMessage", 10, (args, next) => {
+		const res = next(args);
+		safe(() => {
+			const data = args[0];
+			if (!data || typeof data.Sender !== "number") return;
+			if (typeof Player !== "undefined" && Player && data.Sender === Player.MemberNumber) return;
+			if (data.Type !== "Chat" && data.Type !== "Whisper" && data.Type !== "Emote") return;
+			const txt = data.Content;
+			if (txt && String(txt).trim()) PSTriggerFromText(String(txt), data.Sender);
+		})();
+		return res;
+	});
+
+	
+	PSHookWhen(mod, "ChatRoomLeave", 10, (args, next) => {
+		const res = next(args);
+		safe(() => {
+			
+			if (PSActive) PSAbortCore(PSLeaveNodeActive === true, "noroom");
+			if (PSQueue.length) PSQueue = [];
+		})();
+		return res;
+	});
+
+	
+	
+	PSHookWhen(mod, "ActivityAllowedForGroup", 10, (args, next) => {
+		const res = next(args);
+		safe(() => {
+			const C = args[0];
+			const entries = PSActEntriesFor(C);
+			if (entries.length && Array.isArray(res)) {
+				PSLog("动作面板注入", entries.length, "条（部位:", C && C.FocusGroup && C.FocusGroup.Name, "）");
+				for (const e of entries) res.push(e);
+			}
+		})();
+		return res;
+	});
+
+	
+	
+	PSHookWhen(mod, "DialogActivityClick", 10, (args, next) => {
+		const C = args[0];
+		const clicked = args[1];
+		if (clicked && clicked.__psCustom && clicked.__psScriptId) {
+			safe(() => {
+				const sc = PSFindScript(clicked.__psScriptId);
+				if (sc) {
+					PSLog("动作触发：", sc.name, "目标：", C && C.Name);
+					PSFire(sc.id, {
+						manual: true,
+						senderNum: (typeof Player !== "undefined" && Player) ? Player.MemberNumber : null,
+						targetNum: (C && typeof C.MemberNumber === "number") ? C.MemberNumber : null,
+					});
+					
+					try {
+						if (typeof DialogLeave === "function" &&
+							typeof CurrentScreen !== "undefined" && CurrentScreen === "ChatRoom") {
+							DialogLeave();
+						}
+					} catch (e) {   }
+				}
+			})();
+			return;
+		}
+		return next(args);
+	});
 
 	
 	PSInstallActivityButtonHook(mod);
 
 	
 	
-	try {
-		mod.hookFunction("LoginResponse", 10, (args, next) => {
-			const res = next(args);
-			safe(() => {
-				if (typeof Player !== "undefined" && Player &&
-					Number.isInteger(Player.MemberNumber) && Player.MemberNumber > 0) {
-					
-					const C = args[0];
-					if (C && typeof C === "object") {
-						try {
-							const keys = PSMeasureDataSize(C);
-							let total = 0, selfBytes = 0;
-							for (const k of Object.keys(keys)) {
-								const b = keys[k];
-								if (!isNaN(b)) {
-									total += b;
-									if (k === PSStore.cloudKey) selfBytes = b;
-								}
+	PSHookWhen(mod, "LoginResponse", 10, (args, next) => {
+		const res = next(args);
+		safe(() => {
+			if (typeof Player !== "undefined" && Player &&
+				Number.isInteger(Player.MemberNumber) && Player.MemberNumber > 0) {
+				
+				const C = args[0];
+				if (C && typeof C === "object") {
+					PSStore.lastLoginData = C;   
+					try {
+						const keys = PSMeasureDataSize(C);
+						let total = 0, selfBytes = 0;
+						for (const k of Object.keys(keys)) {
+							const b = keys[k];
+							if (!isNaN(b)) {
+								total += b;
+								if (k === PSStore.cloudKey) selfBytes = b;
 							}
-							PSStore.lastAccountSnapshot = { total, self: selfBytes, keys };
-						} catch (e) {   }
-					}
-					
-					let cloudState = null;
-					if (C && typeof C === "object" && typeof C[PSStore.cloudKey] === "string") {
-						try { cloudState = PSStore.normalize(PSStore.decode(C[PSStore.cloudKey])); }
-						catch (e) { cloudState = null; }
-					}
-					PSStore.ensureAccount(Player.MemberNumber, cloudState);
-					if (PSUI.open) PSUIRenderAll();
-					PSToast(PST("toastDataLoaded", PSStore.state ? PSStore.state.scripts.length : 0));
+						}
+						PSStore.lastAccountSnapshot = { total, self: selfBytes, keys };
+					} catch (e) {   }
 				}
-			})();
-			return res;
-		});
-	} catch (e) { PSErr("hook LoginResponse 失败", e); }
-
-	
-	
-	
-	
-	
-	
-	try {
-		mod.hookFunction("ChatRoomSync", 10, (args, next) => {
-			const res = next(args);
-			const run = safe(() => {
-				if (!PSStore.state) return;
-				const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
-				for (const sc of PSStore.state.scripts) {
-					if (sc.enabled === false) continue;
-					if (sc.roomTrigger) {
-						PSLog("进房触发：", sc.name);
-						PSFire(sc.id, { senderNum: me });
-					}
-					if (sc.playerTrigger && Number.isInteger(sc.playerTarget) && sc.playerTarget > 0 && PSTargetInRoom(sc.playerTarget)) {
-						PSLog("进房见到玩家触发：", sc.name, "#" + sc.playerTarget);
-						PSFire(sc.id, { senderNum: me, targetNum: sc.playerTarget });
-					}
+				
+				let cloudState = null;
+				if (C && typeof C === "object" && typeof C[PSStore.cloudKey] === "string") {
+					try { cloudState = PSStore.normalize(PSStore.decode(C[PSStore.cloudKey])); }
+					catch (e) { cloudState = null; }
 				}
-			});
-			if (res && typeof res.then === "function") {
-				res.then(() => { run(); }, () => {}).catch(() => {});
-				return res;
+				PSStore.ensureAccount(Player.MemberNumber, cloudState);
+				if (PSUI.open) PSUIRenderAll();
+				PSToast(PST("toastDataLoaded", PSStore.state ? PSStore.state.scripts.length : 0));
 			}
-			run();
-			return res;
-		});
-	} catch (e) { PSErr("hook ChatRoomSync 失败", e); }
+		})();
+		return res;
+	});
 
 	
-	try {
-		mod.hookFunction("ChatRoomSyncMemberJoin", 10, (args, next) => {
-			const res = next(args);
-			safe(() => {
-				const data = args[0];
-				const num = data && (data.SourceMemberNumber || (data.Character && data.Character.MemberNumber));
-				if (!Number.isInteger(num) || num <= 0 || !PSStore.state) return;
-				const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
-				if (num === me) return;   
-				for (const sc of PSStore.state.scripts) {
-					if (sc.enabled === false) continue;
-					if (sc.playerTrigger && sc.playerTarget === num) {
-						PSLog("玩家进房触发：", sc.name, "#" + num);
-						PSFire(sc.id, { senderNum: me, targetNum: num });
-					}
+	
+	
+	
+	
+	
+	PSHookWhen(mod, "ChatRoomSync", 10, (args, next) => {
+		const res = next(args);
+		const run = safe(() => {
+			if (!PSStore.state) return;
+			const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
+			for (const sc of PSStore.state.scripts) {
+				if (sc.enabled === false) continue;
+				if (sc.roomTrigger) {
+					PSLog("进房触发：", sc.name);
+					PSFire(sc.id, { senderNum: me });
 				}
-			})();
-			return res;
+				if (sc.playerTrigger && Number.isInteger(sc.playerTarget) && sc.playerTarget > 0 && PSTargetInRoom(sc.playerTarget)) {
+					PSLog("进房见到玩家触发：", sc.name, "#" + sc.playerTarget);
+					PSFire(sc.id, { senderNum: me, targetNum: sc.playerTarget });
+				}
+			}
 		});
-	} catch (e) { PSErr("hook ChatRoomSyncMemberJoin 失败", e); }
+		if (res && typeof res.then === "function") {
+			res.then(() => { run(); }, () => {}).catch(() => {});
+			return res;
+		}
+		run();
+		return res;
+	});
+
+	
+	PSHookWhen(mod, "ChatRoomSyncMemberJoin", 10, (args, next) => {
+		const res = next(args);
+		safe(() => {
+			const data = args[0];
+			const num = data && (data.SourceMemberNumber || (data.Character && data.Character.MemberNumber));
+			if (!Number.isInteger(num) || num <= 0 || !PSStore.state) return;
+			const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
+			if (num === me) return;   
+			for (const sc of PSStore.state.scripts) {
+				if (sc.enabled === false) continue;
+				if (sc.playerTrigger && sc.playerTarget === num) {
+					PSLog("玩家进房触发：", sc.name, "#" + num);
+					PSFire(sc.id, { senderNum: me, targetNum: num });
+				}
+			}
+		})();
+		return res;
+	});
 }
 
 function PSMain() {
@@ -4212,7 +4239,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_TARGET_TOKEN, PSCharIsSelf, PSTargetInRoom,
 		PS_ACT_ALIASES,
 		PSFire, PSRun, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
-		PSInstallHooks, PSInputClear,
+		PSInstallHooks, PSInputClear, PSHookWhen,
 		PS_ACTION_GROUPS, PSActGroupLabel, PSActEntriesFor, PSInstallActivityButtonHook,
 		PSActZones, PSActCanvasMap, PSActZoneHitTest, PSUIActPreviewDraw, PSUIActWinOpen, PSUIActWinClose, PSUIActWinSelect,
 		PSActBaseGroup,
