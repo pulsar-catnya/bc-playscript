@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.2.9";
+const PS_VERSION = "1.3.0";
  
 let PSLastOutfitBlocked = [];
  
@@ -197,6 +197,7 @@ const PSStore = {
 				sc.actionGroup = PSActBaseGroup(String(sc.actionGroup ?? "any").slice(0, 64)) || "any";
 				sc.actionTarget = sc.actionTarget === "self" ? "self" : "others";
 				sc.roomTrigger = !!sc.roomTrigger;
+				sc.roomTriggerOnReconnect = sc.roomTriggerOnReconnect !== false;   
 				sc.playerTrigger = !!sc.playerTrigger;
 				sc.playerTarget = Number(sc.playerTarget) || 0;
 				sc.cloudBio = !!sc.cloudBio;   
@@ -701,6 +702,7 @@ function PSMakeDemoScript() {
 		actionGroup: "any",
 		actionTarget: "others",
 		roomTrigger: false,
+		roomTriggerOnReconnect: true,
 		playerTrigger: false,
 		playerTarget: 0,
 		cloudBio: false,
@@ -737,6 +739,7 @@ function PSAddScript(name, keyword) {
 		actionGroup: "any",
 		actionTarget: "others",
 		roomTrigger: false,
+		roomTriggerOnReconnect: true,
 		playerTrigger: false,
 		playerTarget: 0,
 		cloudBio: false,
@@ -790,6 +793,7 @@ function PSUpdateScript(id, patch) {
 	if ("actionGroup" in patch) sc.actionGroup = PSActBaseGroup(String(patch.actionGroup ?? "any").slice(0, 64)) || "any";
 	if ("actionTarget" in patch) sc.actionTarget = patch.actionTarget === "self" ? "self" : "others";
 	if ("roomTrigger" in patch) sc.roomTrigger = !!patch.roomTrigger;
+	if ("roomTriggerOnReconnect" in patch) sc.roomTriggerOnReconnect = !!patch.roomTriggerOnReconnect;
 	if ("playerTrigger" in patch) sc.playerTrigger = !!patch.playerTrigger;
 	if ("playerTarget" in patch) sc.playerTarget = Number(patch.playerTarget) || 0;
 	if ("cloudBio" in patch) sc.cloudBio = !!patch.cloudBio;
@@ -1057,6 +1061,7 @@ function PSClearAll() {
 let PSActive = null;   
 let PSQueue = [];
 const PSLastFire = {}; 
+let PSRoomRelogArmed = 0;   
 
  
 function PSNormalizeText(t) {
@@ -2061,6 +2066,18 @@ function PSInstallHooks(mod) {
 
 	
 	
+	PSHookWhen(mod, "ServerHandleRelog", 10, (args, next) => {
+		const res = next(args);
+		safe(() => {
+			if (res && typeof RelogData === "object" && RelogData && RelogData.ChatRoomName) {
+				PSRoomRelogArmed = PSNow();
+			}
+		})();
+		return res;
+	});
+
+	
+	
 	
 	
 	
@@ -2069,10 +2086,18 @@ function PSInstallHooks(mod) {
 		const res = next(args);
 		const run = safe(() => {
 			if (!PSStore.state) return;
+			
+			
+			const reconnecting = (PSRoomRelogArmed && (PSNow() - PSRoomRelogArmed) < 30000);
+			PSRoomRelogArmed = 0;
 			const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
 			for (const sc of PSStore.state.scripts) {
 				if (sc.enabled === false) continue;
 				if (sc.roomTrigger) {
+					if (reconnecting && sc.roomTriggerOnReconnect === false) {
+						PSLog("进房触发（重连回房，按设置跳过）：", sc.name);
+						continue;
+					}
 					PSLog("进房触发：", sc.name);
 					PSFire(sc.id, { senderNum: me });
 				}
@@ -2214,6 +2239,7 @@ const PSText = {
 		otherTrigger: "其他触发",
 		otherHint: "进房自动演出；见到指定玩家（对方进房 / 你进房时对方已在）也会触发（<target>=对方昵称）",
 		roomTrigger: "进入房间触发",
+		roomTriggerOnReconnect: "重连回房间时也触发",
 		playerTrigger: "见到玩家触发",
 		playerTargetId: "玩家数字ID",
 		dupScript: "复制剧本",
@@ -2386,6 +2412,7 @@ const PSText = {
 		otherTrigger: "Other triggers",
 		otherHint: "Auto-play on room enter; also triggers when the target player enters the room or is already in a room you enter (<target> = their nickname)",
 		roomTrigger: "Trigger on room enter",
+		roomTriggerOnReconnect: "Also trigger when reconnecting back into the room",
 		playerTrigger: "Trigger on seeing player",
 		playerTargetId: "Player ID (number)",
 		dupScript: "Duplicate",
@@ -3837,6 +3864,19 @@ function PSUITriggerSection(box, sc) {
 	roomCb.addEventListener("change", () => { PSUpdateScript(sc.id, { roomTrigger: roomCb.checked }); PSUIRenderAll(); });
 	roomRow.appendChild(roomCb);
 	otherSec.appendChild(roomRow);
+	
+	if (sc.roomTrigger) {
+		const rcRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", paddingLeft: "18px" });
+		const rcLab = PSEl("label", { width: "92px", minWidth: "92px", fontSize: "12px", color: PS_TEXT_DIM });
+		rcLab.textContent = PST("roomTriggerOnReconnect");
+		rcRow.appendChild(rcLab);
+		const rcCb = document.createElement("input");
+		rcCb.type = "checkbox";
+		rcCb.checked = sc.roomTriggerOnReconnect !== false;
+		rcCb.addEventListener("change", () => { PSUpdateScript(sc.id, { roomTriggerOnReconnect: rcCb.checked }); PSUIRenderAll(); });
+		rcRow.appendChild(rcCb);
+		otherSec.appendChild(rcRow);
+	}
 	const plRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
 	const plLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
 	plLab.textContent = PST("playerTrigger");
