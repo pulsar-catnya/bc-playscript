@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.5.3";
+const PS_VERSION = "1.5.4";
  
 let PSLastOutfitBlocked = [];
  
@@ -3525,25 +3525,23 @@ function PSUIFlowBuild() {
 	const visited = new Set();
 	const idxOf = (n) => sc.nodes.indexOf(n);
 
-	const connector = (n, indent, edgeLabel) => {
-		const conn = PSEl("div", { display: "flex", alignItems: "center", gap: "6px", padding: "2px 0", lineHeight: "1", marginLeft: (indent * 22) + "px" });
-		const head = PSEl("span", { minWidth: "22px", textAlign: "center", fontSize: edgeLabel ? "12px" : "14px", color: edgeLabel ? "#d9c2ff" : "#6a7290", fontWeight: edgeLabel ? "700" : "400" });
-		head.textContent = edgeLabel || "↓";
-		conn.appendChild(head);
+	const connector = (n) => {
+		const conn = PSEl("div", { display: "flex", alignItems: "center", gap: "6px", padding: "2px 0", lineHeight: "1" });
+		conn.appendChild(PSEl("span", { width: "22px", textAlign: "center", color: "#6a7290", fontSize: "14px" }, "↓"));
 		conn.appendChild(PSEl("span", {
 			display: "inline-block", padding: "2px 10px", fontSize: "12px",
 			background: n.delay > 0 ? "#2a3150" : "#22301f",
 			color: n.delay > 0 ? "#c9d2f5" : "#9fdc9a",
 			border: "1px solid " + PS_BORDER, borderRadius: "10px",
 		}, PSEsc(PSUIDelayText(n.delay))));
-		box.appendChild(conn);
+		return conn;
 	};
 
-	const makeCard = (n, indent) => {
+	const makeCard = (n) => {
 		const selected = n.id === PSUI.selNodeId;
 		const card = PSEl("div", {
 			display: "flex", alignItems: "flex-start", gap: "8px",
-			padding: "10px 12px", borderRadius: "10px", marginBottom: "2px", marginLeft: (indent * 22) + "px",
+			padding: "10px 12px", borderRadius: "10px", marginBottom: "2px",
 			background: selected ? "#2c3452" : "#20263a",
 			border: "1px solid " + (selected ? PS_ACCENT : PSUINodeColor(n.type)),
 			cursor: "pointer",
@@ -3581,39 +3579,54 @@ function PSUIFlowBuild() {
 		card.appendChild(cb);
 		card.appendChild(PSSmallBtn("↑", () => { PSMoveNode(sc.id, n.id, -1); PSUIRenderAll(); }, { title: PST("moveUp") }));
 		card.appendChild(PSSmallBtn("↓", () => { PSMoveNode(sc.id, n.id, +1); PSUIRenderAll(); }, { title: PST("moveDown") }));
-		box.appendChild(card);
 		PSUI.flowCards.push({ id: n.id, el: card, previewEl: preview });
 		return card;
 	};
 
-	const renderNode = (n, indent, edgeLabel) => {
+	const makeLane = (label, color) => {
+		const lane = PSEl("div", { flex: "1", minWidth: "0", borderLeft: "2px solid " + color, paddingLeft: "6px" });
+		lane.appendChild(PSEl("div", { fontSize: "11px", color: "#d9c2ff", fontWeight: "700", marginBottom: "2px" }, PSEsc(label)));
+		return lane;
+	};
+
+	const renderPath = (n, lane) => {
 		if (!n || visited.has(n.id)) return;
 		visited.add(n.id);
-		connector(n, indent, edgeLabel);
-		makeCard(n, indent);
+		lane.appendChild(connector(n));
+		lane.appendChild(makeCard(n));
 		if (n.type === "judge") {
-			renderNode(byId.get(n.yesId), indent + 1, PST("connectYes"));
-			renderNode(byId.get(n.noId), indent + 1, PST("connectNo"));
+			
+			const cols = PSEl("div", { display: "flex", gap: "8px", alignItems: "flex-start", width: "100%" });
+			const yesLane = makeLane(PST("connectYes"), "#2c7a70");
+			const noLane = makeLane(PST("connectNo"), "#7a2c3a");
+			cols.appendChild(yesLane);
+			cols.appendChild(noLane);
+			lane.appendChild(cols);
+			renderPath(byId.get(n.yesId), yesLane);
+			renderPath(byId.get(n.noId), noLane);
 		} else {
 			let next = n.nextId ? byId.get(n.nextId) : null;
 			if (!next && !hasLinks) {
 				const idx = idxOf(n);
 				next = (idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
 			}
-			renderNode(next, indent, null);
+			renderPath(next, lane);
 		}
 	};
-	if (sc.nodes.length) renderNode(sc.nodes[0], 0, null);
+	if (sc.nodes.length) renderPath(sc.nodes[0], box);
 	
-	sc.nodes.forEach((n) => { if (!visited.has(n.id)) renderNode(n, 0, null); });
+	sc.nodes.forEach((n) => { if (!visited.has(n.id)) renderPath(n, box); });
 
 	 
 	const addRow = PSEl("div", { display: "flex", gap: "8px", margin: "12px 0 20px" });
 	const addBtn = PSBigBtn(PST("addNode"), () => {
 		const sc2 = PSFindScript(PSUI.selScriptId);
 		if (!sc2) { PSToast(PST("toastNoSelScript")); return; }
+		const prev = sc2.nodes.length ? sc2.nodes[sc2.nodes.length - 1] : null;
 		const n = PSAddNode(sc2.id, { type: "chat", text: "", delay: 0, enabled: true });
 		if (n) {
+			
+			if (prev && prev.nextId) PSUpdateNode(sc2.id, prev.id, { nextId: n.id });
 			PSUI.selNodeId = n.id;
 			PSUI.selTrigger = false;
 			PSUI.focusRequest = true;
@@ -3625,9 +3638,13 @@ function PSUIFlowBuild() {
 	const addJudgeBtn = PSBigBtn(PST("addJudge"), () => {
 		const sc2 = PSFindScript(PSUI.selScriptId);
 		if (!sc2) { PSToast(PST("toastNoSelScript")); return; }
-		const n = PSAddNode(sc2.id, { type: "judge", text: PST("judgeDefaultLine"), delay: 0, enabled: true, showResult: true });
-		if (n) {
-			PSUI.selNodeId = n.id;
+		
+		const j = PSAddNode(sc2.id, { type: "judge", text: PST("judgeDefaultLine"), delay: 0, enabled: true, showResult: true });
+		const yesN = PSAddNode(sc2.id, { type: "chat", text: "", delay: 0, enabled: true });
+		const noN = PSAddNode(sc2.id, { type: "chat", text: "", delay: 0, enabled: true });
+		PSUpdateNode(sc2.id, j.id, { yesId: yesN.id, noId: noN.id });
+		if (j) {
+			PSUI.selNodeId = j.id;
 			PSUI.selTrigger = false;
 			PSUI.focusRequest = true;
 			PSUIRenderAll();
