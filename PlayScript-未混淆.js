@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.5.2";
+const PS_VERSION = "1.5.3";
  
 let PSLastOutfitBlocked = [];
  
@@ -1374,8 +1374,14 @@ function PSNodeEdges(nodes) {
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const edges = new Map(nodes.map((n) => [n.id, []]));
 	nodes.forEach((n, i) => {
-		if (n.nextId && byId.has(n.nextId)) edges.get(n.id).push(n.nextId);
-		else if (nodes[i + 1]) edges.get(n.id).push(nodes[i + 1].id);
+		if (n.type === "judge") {
+			if (n.yesId && byId.has(n.yesId)) edges.get(n.id).push(n.yesId);
+			if (n.noId && byId.has(n.noId)) edges.get(n.id).push(n.noId);
+		} else if (n.nextId && byId.has(n.nextId)) {
+			edges.get(n.id).push(n.nextId);
+		} else if (nodes[i + 1]) {
+			edges.get(n.id).push(nodes[i + 1].id);
+		}
 	});
 	return edges;
 }
@@ -1553,23 +1559,13 @@ const PSSendByType = { chat: PSSendChat, rp: PSSendRp, narr: PSSendNarr, action:
 function PSSendJudge(node) {
 	const res = PSJudgeRoll(node);
 	if (PSActive) PSActive.lastJudge = res;
-	const trig = PSActive ? PSActive.triggerNum : null;
-	const targ = PSActive ? PSActive.targetNum : null;
-	const sendAs = (text, type) => {
-		text = PSNormalizeText(text);
-		if (!text) return;
-		const fn = PSSendByType[type] || PSSendChat;
-		try { fn(text); } catch (e) { PSErr("PSSendJudge", e); }
-	};
 	if (node && node.showResult !== false) {
-		let text = PSApplyTokens(node.text, trig, targ, node.timeRules, res.label);
-		if (!PSNormalizeText(text)) text = res.label;   
-		sendAs(text, node.judgeLineType);
+		let text = PSApplyTokens(node.text, PSActive ? PSActive.triggerNum : null, PSActive ? PSActive.targetNum : null, node.timeRules, res.label);
+		text = PSNormalizeText(text);
+		if (!text) text = res.label;   
+		const send = PSSendByType[node.judgeLineType] || PSSendChat;
+		try { send(text); } catch (e) { PSErr("PSSendJudge", e); }
 	}
-	
-	const branchText = res.yes ? node.yesText : node.noText;
-	const branchType = res.yes ? node.yesType : node.noType;
-	sendAs(PSApplyTokens(branchText, trig, targ, node.timeRules, res.label), branchType || "chat");
 	return true;
 }
 PSSendByType.judge = PSSendJudge;
@@ -1997,6 +1993,8 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			outfitGroups: Array.isArray(n.outfitGroups) ? n.outfitGroups.slice() : null,
 			timeRules: Array.isArray(n.timeRules) ? n.timeRules.slice() : [],
 			nextId: (typeof n.nextId === "string" && n.nextId) ? n.nextId : null,
+			yesId: (typeof n.yesId === "string" && n.yesId) ? n.yesId : null,
+			noId: (typeof n.noId === "string" && n.noId) ? n.noId : null,
 			judgeType: n.judgeType === "dice" ? "dice" : "coin",
 			coinYesIs: n.coinYesIs === "tails" ? "tails" : "heads",
 			diceExpr: PSValidDiceExpr(n.diceExpr) ? String(n.diceExpr) : "1d6",
@@ -2004,10 +2002,6 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			diceThreshold: Number(n.diceThreshold) || 4,
 			showResult: n.showResult !== false,
 			judgeLineType: ["chat", "rp", "narr", "action"].includes(n.judgeLineType) ? n.judgeLineType : "chat",
-			yesText: String(n.yesText ?? ""),
-			yesType: ["chat", "rp", "narr", "action"].includes(n.yesType) ? n.yesType : "chat",
-			noText: String(n.noText ?? ""),
-			noType: ["chat", "rp", "narr", "action"].includes(n.noType) ? n.noType : "chat",
 		})),
 		idx: -1,
 		timer: null,
@@ -2017,7 +2011,7 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 		targetNum: (targetNum === undefined ? null : targetNum),
 		lastJudge: null,        
 		steps: 0,               
-		hasLinks: nodes.some((n) => !!n.nextId),   
+		hasLinks: nodes.some((n) => !!n.nextId || (n.type === "judge" && (!!n.yesId || !!n.noId))),   
 	};
 	PSLog("演出开始：", s.name, "共", PSActive.nodes.length, "句");
 	PSToast(PST("toastStarted", s.name, PSActive.nodes.length));
@@ -2026,6 +2020,11 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 
  
 function PSNodeNext(A, cur) {
+	if (cur.type === "judge") {
+		const j = A.lastJudge || { yes: false };
+		const id = j.yes ? cur.yesId : cur.noId;
+		return id ? (A.nodes.find((n) => n.id === id) || null) : null;
+	}
 	if (cur.nextId) {
 		const t = A.nodes.find((n) => n.id === cur.nextId);
 		if (t) return t;
@@ -3453,31 +3452,17 @@ function PSUIDelayText(delay) {
  
 function PSUIOutgoingLine(sc, n, port) {
 	const el = PSEl("div", { textAlign: "center", padding: "1px 0 4px", lineHeight: "1.4" });
-	const id = n.nextId;
+	const id = port === "yes" ? n.yesId : (port === "no" ? n.noId : n.nextId);
 	const target = id ? PSUINodeTargetLabel(sc, id) : null;
+	const head = port === "yes" ? PST("connectYes") : (port === "no" ? PST("connectNo") : "↓");
 	el.appendChild(PSEl("span", {
 		display: "inline-block", padding: "2px 10px", fontSize: "12px", borderRadius: "10px",
 		background: target ? "#2a2140" : "#1c1e2a",
 		color: target ? "#d9c2ff" : "#6a7290",
 		border: "1px solid " + (target ? "#9f7fd0" : PS_BORDER),
 		maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-	}, PSEsc("↓ → " + (target ? target : PST("connectNone")))));
+	}, PSEsc(head + " → " + (target ? target : PST("connectNone")))));
 	return el;
-}
-
- 
-function PSUIJudgeBranchesLine(sc, n) {
-	const box = PSEl("div", { padding: "2px 0 4px" });
-	const mk = (label, text, type) => {
-		const row = PSEl("div", { display: "flex", alignItems: "flex-start", gap: "8px", padding: "3px 8px", margin: "0 0 2px 14px", borderRadius: "8px", background: "#1c2134", borderLeft: "3px solid " + PSUINodeColor(type || "chat") });
-		row.appendChild(PSEl("span", { fontSize: "12px", color: "#d9c2ff", fontWeight: "700", whiteSpace: "nowrap" }, PSEsc(label)));
-		const t = PSUINodePreview(text);
-		row.appendChild(PSEl("span", { flex: "1", minWidth: "0", fontSize: "12px", color: t === "(空)" ? "#6a7290" : PS_TEXT, whiteSpace: "pre-wrap", wordBreak: "break-word" }, PSEsc(t)));
-		return row;
-	};
-	box.appendChild(mk(PST("connectYes"), n.yesText, n.yesType));
-	box.appendChild(mk(PST("connectNo"), n.noText, n.noType));
-	return box;
 }
 
 function PSUIFlowBuild() {
@@ -3534,23 +3519,31 @@ function PSUIFlowBuild() {
 		box.appendChild(PSEl("div", { color: PS_TEXT_DIM, padding: "18px 10px", textAlign: "center" }, PSEsc(PST("nodeEmpty"))));
 	}
 
-	sc.nodes.forEach((n, i) => {
-		 
-		const conn = PSEl("div", { textAlign: "center", padding: "2px 0", lineHeight: "1" });
-		conn.appendChild(PSEl("span", { display: "block", color: "#6a7290", fontSize: "14px" }, "↓"));
+	 
+	const byId = new Map(sc.nodes.map((n) => [n.id, n]));
+	const hasLinks = sc.nodes.some((n) => !!n.nextId || (n.type === "judge" && (!!n.yesId || !!n.noId)));
+	const visited = new Set();
+	const idxOf = (n) => sc.nodes.indexOf(n);
+
+	const connector = (n, indent, edgeLabel) => {
+		const conn = PSEl("div", { display: "flex", alignItems: "center", gap: "6px", padding: "2px 0", lineHeight: "1", marginLeft: (indent * 22) + "px" });
+		const head = PSEl("span", { minWidth: "22px", textAlign: "center", fontSize: edgeLabel ? "12px" : "14px", color: edgeLabel ? "#d9c2ff" : "#6a7290", fontWeight: edgeLabel ? "700" : "400" });
+		head.textContent = edgeLabel || "↓";
+		conn.appendChild(head);
 		conn.appendChild(PSEl("span", {
-			display: "inline-block", marginTop: "2px", padding: "2px 10px", fontSize: "12px",
+			display: "inline-block", padding: "2px 10px", fontSize: "12px",
 			background: n.delay > 0 ? "#2a3150" : "#22301f",
 			color: n.delay > 0 ? "#c9d2f5" : "#9fdc9a",
 			border: "1px solid " + PS_BORDER, borderRadius: "10px",
 		}, PSEsc(PSUIDelayText(n.delay))));
 		box.appendChild(conn);
+	};
 
-		 
+	const makeCard = (n, indent) => {
 		const selected = n.id === PSUI.selNodeId;
 		const card = PSEl("div", {
 			display: "flex", alignItems: "flex-start", gap: "8px",
-			padding: "10px 12px", borderRadius: "10px", marginBottom: "2px",
+			padding: "10px 12px", borderRadius: "10px", marginBottom: "2px", marginLeft: (indent * 22) + "px",
 			background: selected ? "#2c3452" : "#20263a",
 			border: "1px solid " + (selected ? PS_ACCENT : PSUINodeColor(n.type)),
 			cursor: "pointer",
@@ -3562,21 +3555,14 @@ function PSUIFlowBuild() {
 			PSUI.selTrigger = false;
 			PSUIRenderAll();
 		});
-
-		 
-		const handle = PSEl("span", {
-			cursor: "grab", color: "#6a7290", fontSize: "14px", padding: "2px 0",
-			userSelect: "none",
-		}, "⋮⋮");
+		const handle = PSEl("span", { cursor: "grab", color: "#6a7290", fontSize: "14px", padding: "2px 0", userSelect: "none" }, "⋮⋮");
 		handle.title = "拖动排序";
 		handle.addEventListener("mousedown", (ev) => {
 			ev.preventDefault && ev.preventDefault();
 			ev.stopPropagation && ev.stopPropagation();
-			PSUINodeDragStart(sc.id, n.id, i);
+			PSUINodeDragStart(sc.id, n.id, idxOf(n));
 		});
 		card.appendChild(handle);
-
-		 
 		const mid = PSEl("div", { flex: "1", minWidth: "0" });
 		const label = PSEl("div", { fontSize: "11px", color: PSUINodeColor(n.type), fontWeight: "700" }, PSEsc(PSUITypeLabel(n.type)));
 		mid.appendChild(label);
@@ -3586,8 +3572,6 @@ function PSUIFlowBuild() {
 		}, PSEsc(n.type === "leave" ? PST("leavePreview") : (n.type === "outfit" ? (PST("outfitPreview") + "：" + PSUINodePreview(n.text)) : (n.type === "judge" ? PSUIJudgePreview(n) : PSUINodePreview(n.text)))));
 		mid.appendChild(preview);
 		card.appendChild(mid);
-
-		 
 		const cb = document.createElement("input");
 		cb.type = "checkbox";
 		cb.checked = n.enabled !== false;
@@ -3597,18 +3581,31 @@ function PSUIFlowBuild() {
 		card.appendChild(cb);
 		card.appendChild(PSSmallBtn("↑", () => { PSMoveNode(sc.id, n.id, -1); PSUIRenderAll(); }, { title: PST("moveUp") }));
 		card.appendChild(PSSmallBtn("↓", () => { PSMoveNode(sc.id, n.id, +1); PSUIRenderAll(); }, { title: PST("moveDown") }));
-
 		box.appendChild(card);
 		PSUI.flowCards.push({ id: n.id, el: card, previewEl: preview });
+		return card;
+	};
 
-		 
+	const renderNode = (n, indent, edgeLabel) => {
+		if (!n || visited.has(n.id)) return;
+		visited.add(n.id);
+		connector(n, indent, edgeLabel);
+		makeCard(n, indent);
 		if (n.type === "judge") {
-			box.appendChild(PSUIJudgeBranchesLine(sc, n));
+			renderNode(byId.get(n.yesId), indent + 1, PST("connectYes"));
+			renderNode(byId.get(n.noId), indent + 1, PST("connectNo"));
+		} else {
+			let next = n.nextId ? byId.get(n.nextId) : null;
+			if (!next && !hasLinks) {
+				const idx = idxOf(n);
+				next = (idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
+			}
+			renderNode(next, indent, null);
 		}
-		if (n.nextId) {
-			box.appendChild(PSUIOutgoingLine(sc, n, "next"));
-		}
-	});
+	};
+	if (sc.nodes.length) renderNode(sc.nodes[0], 0, null);
+	
+	sc.nodes.forEach((n) => { if (!visited.has(n.id)) renderNode(n, 0, null); });
 
 	 
 	const addRow = PSEl("div", { display: "flex", gap: "8px", margin: "12px 0 20px" });
@@ -4817,51 +4814,11 @@ function PSUIJudgeEditor(box, sc, node) {
 	}
 
 	
-	PSUIJudgeBranchEditor(sec, sc, node, "yes");
-	PSUIJudgeBranchEditor(sec, sc, node, "no");
+	PSUIConnectEditorRow(sec, sc, node, "yes");
+	PSUIConnectEditorRow(sec, sc, node, "no");
 	
 	PSUIConnectEditorRow(sec, sc, node, "next");
 	box.appendChild(sec);
-}
-
- 
-function PSUIJudgeBranchEditor(box, sc, node, port) {
-	const isYes = port === "yes";
-	const textKey = isYes ? "yesText" : "noText";
-	const typeKey = isYes ? "yesType" : "noType";
-	const row = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#141a2c", border: "1px solid " + PS_BORDER, marginBottom: "8px" });
-	row.appendChild(PSEl("div", { fontWeight: "700", fontSize: "13px", color: isYes ? "#9fdc9a" : "#f3c3c3", marginBottom: "6px" }, PSEsc(isYes ? PST("connectYes") : PST("connectNo"))));
-	const typeSel = PSUISelect(node[typeKey] || "chat", [
-		'<option value="chat">' + PSEsc(PST("typeChat")) + "</option>",
-		'<option value="rp">' + PSEsc(PST("typeRp")) + "</option>",
-		'<option value="narr">' + PSEsc(PST("typeNarr")) + "</option>",
-		'<option value="action">' + PSEsc(PST("typeAction")) + "</option>",
-	].join(""), (v) => { PSUpdateNode(sc.id, node.id, { [typeKey]: v }); PSUIRenderAll(); });
-	row.appendChild(typeSel);
-	const ta = document.createElement("textarea");
-	ta.rows = 2;
-	ta.value = node[textKey] || "";
-	PSStyle(ta, { width: "100%", boxSizing: "border-box", padding: "8px 10px", fontSize: "13px", borderRadius: "6px", background: "#10141f", color: PS_TEXT, border: "1px solid " + PS_BORDER, fontFamily: "sans-serif", resize: "vertical", marginTop: "6px", marginBottom: "6px" });
-	const apply = () => {
-		PSUpdateNode(sc.id, node.id, { [textKey]: ta.value });
-		const card = PSUI.flowCards.find((c) => c.id === node.id);
-		if (card && card.previewEl) card.previewEl.textContent = PSUIJudgePreview(node);
-	};
-	ta.addEventListener("input", apply);
-	row.appendChild(ta);
-	const trow = PSEl("div", { display: "flex", gap: "6px", flexWrap: "wrap" });
-	const ins = (token) => {
-		const pos = (typeof ta.selectionStart === "number") ? ta.selectionStart : ta.value.length;
-		const end = (typeof ta.selectionEnd === "number") ? ta.selectionEnd : pos;
-		ta.value = ta.value.slice(0, pos) + token + ta.value.slice(end);
-		apply();
-		try { ta.focus(); } catch (e) {   }
-	};
-	trow.appendChild(PSSmallBtn(PST("insertNick"), () => ins(PS_NICK_TOKEN)));
-	trow.appendChild(PSSmallBtn(PST("insertTarget"), () => ins(PS_TARGET_TOKEN)));
-	trow.appendChild(PSSmallBtn(PST("insertRoll"), () => { ins(PS_ROLL_TOKEN); PSUIRenderAll(); }));
-	row.appendChild(trow);
-	box.appendChild(row);
 }
 
 function PSUIRenderStatus() {
