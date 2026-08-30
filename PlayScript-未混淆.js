@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.5.4";
+const PS_VERSION = "1.5.5";
  
 let PSLastOutfitBlocked = [];
  
@@ -1428,6 +1428,20 @@ function PSNodeDisconnect(scriptId, nodeId, port) {
 }
 
  
+function PSAddNodeAfter(scriptId, nodeId, opts) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return null;
+	const ref = sc.nodes.find((n) => n.id === nodeId);
+	if (!ref) return null;
+	if (sc.nodes.length >= PS_MAX_NODES) { PSToast(PST("toastMaxNodes", PS_MAX_NODES)); return null; }
+	const n = PSAddNode(scriptId, opts, sc.nodes.indexOf(ref) + 1);
+	if (n && ref.type !== "judge") {
+		PSUpdateNode(scriptId, ref.id, { nextId: n.id });
+	}
+	return n;
+}
+
+ 
 function PSCanSend() {
 	if (typeof ServerPlayerIsInChatRoom === "function") {
 		try { return !!ServerPlayerIsInChatRoom(); } catch (e) { return false; }
@@ -2619,6 +2633,8 @@ const PSText = {
 		judgeShowResult: "显示判定结果",
 		judgeLineType: "结果台词类型",
 		judgeDefaultLine: "判定结果：<roll>",
+		judgeYesPh: "（是分支，点此编辑）",
+		judgeNoPh: "（否分支，点此编辑）",
 		insertRoll: "插入判定结果",
 		addJudge: "+ 添加判定",
 		connectBtn: "连接…",
@@ -2831,6 +2847,8 @@ const PSText = {
 		judgeShowResult: "Show the result",
 		judgeLineType: "Result line type",
 		judgeDefaultLine: "Result: <roll>",
+		judgeYesPh: "(Yes branch — click to edit)",
+		judgeNoPh: "(No branch — click to edit)",
 		insertRoll: "Insert result tag",
 		addJudge: "+ Add judge",
 		connectBtn: "Connect…",
@@ -3622,11 +3640,17 @@ function PSUIFlowBuild() {
 	const addBtn = PSBigBtn(PST("addNode"), () => {
 		const sc2 = PSFindScript(PSUI.selScriptId);
 		if (!sc2) { PSToast(PST("toastNoSelScript")); return; }
-		const prev = sc2.nodes.length ? sc2.nodes[sc2.nodes.length - 1] : null;
-		const n = PSAddNode(sc2.id, { type: "chat", text: "", delay: 0, enabled: true });
+		
+		const sel = PSUI.selNodeId ? sc2.nodes.find((x) => x.id === PSUI.selNodeId) : null;
+		let n = null;
+		if (sel && sel.type !== "judge") {
+			n = PSAddNodeAfter(sc2.id, sel.id, { type: "chat", text: "", delay: 0, enabled: true });
+		} else {
+			const prev = sc2.nodes.length ? sc2.nodes[sc2.nodes.length - 1] : null;
+			n = PSAddNode(sc2.id, { type: "chat", text: "", delay: 0, enabled: true });
+			if (n && prev && prev.type !== "judge") PSUpdateNode(sc2.id, prev.id, { nextId: n.id });
+		}
 		if (n) {
-			
-			if (prev && prev.nextId) PSUpdateNode(sc2.id, prev.id, { nextId: n.id });
 			PSUI.selNodeId = n.id;
 			PSUI.selTrigger = false;
 			PSUI.focusRequest = true;
@@ -3640,8 +3664,8 @@ function PSUIFlowBuild() {
 		if (!sc2) { PSToast(PST("toastNoSelScript")); return; }
 		
 		const j = PSAddNode(sc2.id, { type: "judge", text: PST("judgeDefaultLine"), delay: 0, enabled: true, showResult: true });
-		const yesN = PSAddNode(sc2.id, { type: "chat", text: "", delay: 0, enabled: true });
-		const noN = PSAddNode(sc2.id, { type: "chat", text: "", delay: 0, enabled: true });
+		const yesN = PSAddNode(sc2.id, { type: "chat", text: PST("judgeYesPh"), delay: 0, enabled: true });
+		const noN = PSAddNode(sc2.id, { type: "chat", text: PST("judgeNoPh"), delay: 0, enabled: true });
 		PSUpdateNode(sc2.id, j.id, { yesId: yesN.id, noId: noN.id });
 		if (j) {
 			PSUI.selNodeId = j.id;
@@ -4664,7 +4688,8 @@ function PSUINodeEditor(box, sc, node) {
 		if (n) { PSUI.selNodeId = n.id; PSUI.focusRequest = true; PSUIRenderAll(); }
 	}));
 	nbtnRow.appendChild(PSSmallBtn(PST("insAfter"), () => {
-		const n = PSAddNode(sc.id, { type: node.type, text: "", delay: 0, enabled: true }, idx + 1);
+		
+		const n = PSAddNodeAfter(sc.id, node.id, { type: node.type, text: "", delay: 0, enabled: true });
 		if (n) { PSUI.selNodeId = n.id; PSUI.focusRequest = true; PSUIRenderAll(); }
 	}));
 	nbtnRow.appendChild(PSSmallBtn(PST("moveUp"), () => { PSMoveNode(sc.id, node.id, -1); PSUIRenderAll(); }));
@@ -4731,18 +4756,25 @@ function PSUITimeRuleSection(box, sc, node) {
  
 function PSUIConnectEditorRow(box, sc, node, port) {
 	const id = port === "yes" ? node.yesId : (port === "no" ? node.noId : node.nextId);
+	
+	
+	const hasLinks = sc.nodes.some((x) => !!x.nextId || (x.type === "judge" && (!!x.yesId || !!x.noId)));
+	const idx = sc.nodes.indexOf(node);
+	const implicitNext = (!id && !hasLinks && idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
 	const row = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
 	const lab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
 	lab.textContent = port === "yes" ? PST("connectYes") : (port === "no" ? PST("connectNo") : PST("connectNextLabel"));
 	row.appendChild(lab);
-	if (id) {
-		const t = PSUINodeTargetLabel(sc, id);
+	if (id || implicitNext) {
+		const t = id ? PSUINodeTargetLabel(sc, id) : (PSUITypeLabel(implicitNext.type) + "：" + (implicitNext.type === "judge" ? PSUIJudgePreview(implicitNext) : PSUINodePreview(implicitNext.text)));
 		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
 		info.textContent = t || id;
 		info.title = t || id;
 		row.appendChild(info);
-		const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, node.id, port); PSUIRenderAll(); });
-		row.appendChild(disc);
+		if (id) {
+			const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, node.id, port); PSUIRenderAll(); });
+			row.appendChild(disc);
+		}
 	} else {
 		const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, port));
 		row.appendChild(btn);
@@ -5234,7 +5266,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_NICK_TOKEN, PSCharDisplayName, PSCharObjectOf, PSTriggerName, PSApplyTokens,
 		PS_TARGET_TOKEN, PSCharIsSelf, PSTargetInRoom,
 		PS_TIME_TOKEN, PSTimeHMToMin, PSTimeRuleMinutes, PSTimeRuleMatch, PSTimeRuleText, PSNormalizeTimeRules, PSNormalizeTimeTriggerRules, PSTimeTriggerScan,
-		PS_ROLL_TOKEN, PSJudgeRoll, PSNodeEdges, PSNodeConnectionWouldCycle, PSNodeConnect, PSNodeDisconnect, PSValidDiceExpr,
+		PS_ROLL_TOKEN, PSJudgeRoll, PSNodeEdges, PSNodeConnectionWouldCycle, PSNodeConnect, PSNodeDisconnect, PSAddNodeAfter, PSValidDiceExpr,
 		PS_ACT_ALIASES,
 		PSFire, PSRun, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
 		PSInstallHooks, PSInputClear, PSHookWhen,
