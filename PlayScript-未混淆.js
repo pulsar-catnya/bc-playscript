@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.6.0";
+const PS_VERSION = "1.7.0";
  
 let PSLastOutfitBlocked = [];
  
@@ -237,10 +237,7 @@ const PSStore = {
 							diceThreshold: PSClamp(Number(n.diceThreshold) || 4, 1, 100000),
 							showResult: n.showResult !== false,
 							judgeLineType: ["chat", "rp", "narr", "action"].includes(n.judgeLineType) ? n.judgeLineType : "chat",
-							yesText: String(n.yesText ?? "").slice(0, PS_MAX_TEXT),
-							yesType: ["chat", "rp", "narr", "action"].includes(n.yesType) ? n.yesType : "chat",
-							noText: String(n.noText ?? "").slice(0, PS_MAX_TEXT),
-							noType: ["chat", "rp", "narr", "action"].includes(n.noType) ? n.noType : "chat",
+							diceBranches: PSNormalizeDiceBranches(n.diceBranches),
 						};
 					})
 					: [];
@@ -875,10 +872,7 @@ function PSAddNode(scriptId, node, atIdx) {
 		diceThreshold: PSClamp(Number((node && node.diceThreshold) || 4), 1, 100000),
 		showResult: !node || node.showResult !== false,
 		judgeLineType: (node && ["chat", "rp", "narr", "action"].includes(node.judgeLineType)) ? node.judgeLineType : "chat",
-		yesText: String((node && node.yesText) ?? "").slice(0, PS_MAX_TEXT),
-		yesType: (node && ["chat", "rp", "narr", "action"].includes(node.yesType)) ? node.yesType : "chat",
-		noText: String((node && node.noText) ?? "").slice(0, PS_MAX_TEXT),
-		noType: (node && ["chat", "rp", "narr", "action"].includes(node.noType)) ? node.noType : "chat",
+		diceBranches: PSNormalizeDiceBranches(node && node.diceBranches),
 	};
 	if (atIdx === undefined || atIdx === null || atIdx < 0) sc.nodes.push(n);
 	else sc.nodes.splice(PSClamp(atIdx, 0, sc.nodes.length), 0, n);
@@ -956,10 +950,7 @@ function PSUpdateNode(scriptId, nodeId, patch) {
 	if ("diceThreshold" in patch) n.diceThreshold = PSClamp(Number(patch.diceThreshold) || 4, 1, 100000);
 	if ("showResult" in patch) n.showResult = patch.showResult !== false;
 	if ("judgeLineType" in patch && ["chat", "rp", "narr", "action"].includes(patch.judgeLineType)) n.judgeLineType = patch.judgeLineType;
-	if ("yesText" in patch) n.yesText = String(patch.yesText ?? "").slice(0, PS_MAX_TEXT);
-	if ("yesType" in patch && ["chat", "rp", "narr", "action"].includes(patch.yesType)) n.yesType = patch.yesType;
-	if ("noText" in patch) n.noText = String(patch.noText ?? "").slice(0, PS_MAX_TEXT);
-	if ("noType" in patch && ["chat", "rp", "narr", "action"].includes(patch.noType)) n.noType = patch.noType;
+	if ("diceBranches" in patch) n.diceBranches = PSNormalizeDiceBranches(patch.diceBranches);
 	PSStore.requestSave();
 	return true;
 }
@@ -1359,6 +1350,12 @@ function PSJudgeRoll(node) {
 			const sides = m ? Math.min(Number(m[2]), 100000) : 6;
 			let total = 0;
 			for (let i = 0; i < n; i++) total += Math.floor(Math.random() * sides) + 1;
+			
+			if (Array.isArray(node.diceBranches) && node.diceBranches.length) {
+				const br = node.diceBranches.find((b) => total >= b.from && total <= b.to);
+				return { yes: false, label: String(total), targetId: br ? br.nodeId : null };
+			}
+			
 			const th = Math.min(100000, Math.max(1, Number(node.diceThreshold) || 4));
 			const yes = node.diceRule === "lte" ? (total <= th) : (total >= th);
 			return { yes, label: String(total) };
@@ -1370,6 +1367,44 @@ function PSJudgeRoll(node) {
 }
 
  
+function PSNormalizeDiceBranches(arr) {
+	if (!Array.isArray(arr)) return [];
+	const out = [];
+	for (const b of arr) {
+		if (!b || typeof b !== "object") continue;
+		const from = Math.max(1, Math.min(100000, Number(b.from) || 1));
+		const to = Math.max(1, Math.min(100000, Number(b.to) || 1));
+		if (from > to) continue;
+		out.push({
+			id: typeof b.id === "string" ? b.id : PSUid("db"),
+			from,
+			to,
+			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
+		});
+	}
+	return out.slice(0, 5);
+}
+
+ 
+function PSJudgeAddDiceBranch(scriptId, nodeId) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return null;
+	const node = sc.nodes.find((n) => n.id === nodeId);
+	if (!node || node.type !== "judge") return null;
+	const branches = PSNormalizeDiceBranches(node.diceBranches);
+	if (branches.length >= 5) { PSToast(PST("judgeBranchMax")); return null; }
+	const last = branches[branches.length - 1];
+	const from = last ? last.to + 1 : 1;
+	const to = from + 9;
+	const n = PSAddNode(scriptId, { type: "chat", text: PST("judgeBranchPh", branches.length + 1), delay: 0, enabled: true });
+	if (!n) return null;
+	const branch = { id: PSUid("db"), from, to, nodeId: n.id };
+	branches.push(branch);
+	PSUpdateNode(scriptId, nodeId, { diceBranches: branches });
+	return branch;
+}
+
+ 
 function PSNodeEdges(nodes) {
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const edges = new Map(nodes.map((n) => [n.id, []]));
@@ -1377,6 +1412,7 @@ function PSNodeEdges(nodes) {
 		if (n.type === "judge") {
 			if (n.yesId && byId.has(n.yesId)) edges.get(n.id).push(n.yesId);
 			if (n.noId && byId.has(n.noId)) edges.get(n.id).push(n.noId);
+			if (Array.isArray(n.diceBranches)) n.diceBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
 		} else if (n.nextId && byId.has(n.nextId)) {
 			edges.get(n.id).push(n.nextId);
 		} else if (nodes[i + 1]) {
@@ -1418,6 +1454,7 @@ function PSBranchNodeSet(nodes) {
 		if (n.type === "judge") {
 			if (n.yesId) walk(n.yesId);
 			if (n.noId) walk(n.noId);
+			if (Array.isArray(n.diceBranches)) n.diceBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
 		}
 	});
 	return set;
@@ -2036,6 +2073,7 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			diceThreshold: Number(n.diceThreshold) || 4,
 			showResult: n.showResult !== false,
 			judgeLineType: ["chat", "rp", "narr", "action"].includes(n.judgeLineType) ? n.judgeLineType : "chat",
+			diceBranches: Array.isArray(n.diceBranches) ? n.diceBranches.slice() : [],
 		})),
 		idx: -1,
 		timer: null,
@@ -2057,6 +2095,7 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 function PSNodeNext(A, cur) {
 	if (cur.type === "judge") {
 		const j = A.lastJudge || { yes: false };
+		if (j.targetId) return A.nodes.find((n) => n.id === j.targetId) || null;   
 		const id = j.yes ? cur.yesId : cur.noId;
 		return id ? (A.nodes.find((n) => n.id === id) || null) : null;
 	}
@@ -2656,6 +2695,11 @@ const PSText = {
 		judgeDefaultLine: "判定结果：<roll>",
 		judgeYesPh: "（是分支，点此编辑）",
 		judgeNoPh: "（否分支，点此编辑）",
+		judgeDiceBranches: "结果分支（最多 5 个）",
+		judgeDiceBranchesHint: "按点数范围走不同分支：1~10 走分支1、11~20 走分支2……添加分支会自动创建并连接一个台词节点",
+		judgeBranchAdd: "添加分支",
+		judgeBranchMax: "最多只能有 5 个结果分支",
+		judgeBranchPh: "（分支{0}，点此编辑）",
 		insertRoll: "插入判定结果",
 		addJudge: "+ 添加判定",
 		connectBtn: "连接…",
@@ -2870,6 +2914,11 @@ const PSText = {
 		judgeDefaultLine: "Result: <roll>",
 		judgeYesPh: "(Yes branch — click to edit)",
 		judgeNoPh: "(No branch — click to edit)",
+		judgeDiceBranches: "Result branches (max 5)",
+		judgeDiceBranchesHint: "Route by roll result: 1~10 → branch 1, 11~20 → branch 2, etc. Adding a branch auto-creates and connects a line node",
+		judgeBranchAdd: "Add branch",
+		judgeBranchMax: "At most 5 result branches",
+		judgeBranchPh: "(Branch {0} — click to edit)",
 		insertRoll: "Insert result tag",
 		addJudge: "+ Add judge",
 		connectBtn: "Connect…",
@@ -3642,21 +3691,26 @@ function PSUIFlowBuild() {
 		visited.add(n.id);
 		if (n.type === "judge") {
 			
-			
 			const jBox = PSEl("div", { display: "inline-flex", flexDirection: "column", alignItems: "stretch", verticalAlign: "top" });
 			const card = makeCard(n);
 			card.style.maxWidth = "none";
 			jBox.appendChild(card);
 			const cols = PSEl("div", { display: "flex", gap: "8px", alignItems: "flex-start", flexWrap: "nowrap" });
-			const yesLane = makeLane(PST("connectYes"), "#2c7a70");
-			const noLane = makeLane(PST("connectNo"), "#7a2c3a");
-			cols.appendChild(yesLane);
-			cols.appendChild(noLane);
+			
+			const branchDefs = (n.judgeType === "dice" && Array.isArray(n.diceBranches) && n.diceBranches.length)
+				? n.diceBranches.map((b) => ({ label: b.from + "~" + b.to, nodeId: b.nodeId, color: "#4e7fb0" }))
+				: [
+					{ label: PST("connectYes"), nodeId: n.yesId, color: "#2c7a70" },
+					{ label: PST("connectNo"), nodeId: n.noId, color: "#7a2c3a" },
+				];
+			branchDefs.forEach((bd) => {
+				const lane = makeLane(bd.label, bd.color);
+				cols.appendChild(lane);
+				renderPath(byId.get(bd.nodeId), lane);
+			});
 			jBox.appendChild(cols);
 			lane.appendChild(connector(n));
 			lane.appendChild(jBox);
-			renderPath(byId.get(n.yesId), yesLane);
-			renderPath(byId.get(n.noId), noLane);
 		} else {
 			lane.appendChild(connector(n));
 			lane.appendChild(makeCard(n));
@@ -3736,6 +3790,9 @@ function PSUINodePreview(text) {
  
 function PSUIJudgePreview(n) {
 	if (n && n.judgeType === "dice") {
+		if (Array.isArray(n.diceBranches) && n.diceBranches.length) {
+			return "🎲 " + (n.diceExpr || "1d6") + " · " + n.diceBranches.length + " 个结果分支";
+		}
 		const rule = n.diceRule === "lte" ? "≤" : "≥";
 		return "🎲 " + (n.diceExpr || "1d6") + " " + rule + " " + (n.diceThreshold || 4) + " → 是";
 	}
@@ -4857,13 +4914,6 @@ function PSUIJudgeEditor(box, sc, node) {
 	if (node.judgeType === "dice") {
 		const exprInp = PSUIInput(node.diceExpr || "1d6", (v) => { PSUpdateNode(sc.id, node.id, { diceExpr: v }); PSUIRenderAll(); }, { placeholder: "1d6 / 1d100 / 2d100" });
 		sec.appendChild(PSUIEditorRow(PST("judgeDiceExpr"), exprInp));
-		const ruleSel = PSUISelect(node.diceRule === "lte" ? "lte" : "gte", [
-			'<option value="gte">' + PSEsc(PST("judgeGte")) + "</option>",
-			'<option value="lte">' + PSEsc(PST("judgeLte")) + "</option>",
-		].join(""), (v) => { PSUpdateNode(sc.id, node.id, { diceRule: v }); PSUIRenderAll(); });
-		sec.appendChild(PSUIEditorRow(PST("judgeDiceRule"), ruleSel));
-		const thInp = PSUIInput(String(node.diceThreshold || 4), (v) => { PSUpdateNode(sc.id, node.id, { diceThreshold: v }); PSUIRenderAll(); }, { type: "number", min: "1", step: "1" });
-		sec.appendChild(PSUIEditorRow(PST("judgeDiceThreshold"), thInp));
 	} else {
 		const coinSel = PSUISelect(node.coinYesIs === "tails" ? "tails" : "heads", [
 			'<option value="heads">' + PSEsc(PST("judgeCoinHeads")) + "</option>",
@@ -4922,8 +4972,55 @@ function PSUIJudgeEditor(box, sc, node) {
 	}
 
 	
-	PSUIConnectEditorRow(sec, sc, node, "yes");
-	PSUIConnectEditorRow(sec, sc, node, "no");
+	if (node.judgeType === "dice") {
+		PSUIJudgeDiceBranches(sec, sc, node);
+	} else {
+		PSUIConnectEditorRow(sec, sc, node, "yes");
+		PSUIConnectEditorRow(sec, sc, node, "no");
+	}
+	box.appendChild(sec);
+}
+
+ 
+function PSUIJudgeDiceBranches(box, sc, node) {
+	const sec = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#141a2c", border: "1px solid " + PS_BORDER, marginBottom: "8px" });
+	sec.appendChild(PSEl("div", { fontWeight: "700", fontSize: "13px", color: "#f0b3ff", marginBottom: "6px" }, PSEsc(PST("judgeDiceBranches"))));
+	const hint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px" });
+	hint.textContent = PST("judgeDiceBranchesHint");
+	sec.appendChild(hint);
+
+	const branches = PSNormalizeDiceBranches(node.diceBranches);
+	const commit = (next) => { PSUpdateNode(sc.id, node.id, { diceBranches: next }); PSUIRenderAll(); };
+	const setField = (bid, key, val) => commit(branches.map((b) => (b.id === bid ? Object.assign({}, b, { [key]: val }) : b)));
+	const del = (bid) => commit(branches.filter((b) => b.id !== bid));
+
+	branches.forEach((b, i) => {
+		const row1 = PSEl("div", { display: "flex", gap: "6px", alignItems: "center", marginBottom: "4px" });
+		const fromInp = PSUIInput(String(b.from), (v) => setField(b.id, "from", v), { type: "number", min: "1", step: "1" });
+		fromInp.style.flex = "0 1 70px";
+		row1.appendChild(fromInp);
+		row1.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "12px" }, "~"));
+		const toInp = PSUIInput(String(b.to), (v) => setField(b.id, "to", v), { type: "number", min: "1", step: "1" });
+		toInp.style.flex = "0 1 70px";
+		row1.appendChild(toInp);
+		const t = b.nodeId ? PSUINodeTargetLabel(sc, b.nodeId) : null;
+		const info = PSEl("span", { flex: "1", minWidth: "0", fontSize: "12px", color: t ? PS_ACCENT : "#6a7290", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, PSEsc(t || PST("connectNone")));
+		row1.appendChild(info);
+		if (b.nodeId) {
+			const disc = PSSmallBtn(PST("connectDisconnect"), () => setField(b.id, "nodeId", null));
+			row1.appendChild(disc);
+		}
+		const delBtn = PSSmallBtn("✕", () => del(b.id), { bg: "#5a2c3a" });
+		row1.appendChild(delBtn);
+		sec.appendChild(row1);
+	});
+
+	if (branches.length < 5) {
+		const addBtn = PSSmallBtn(PST("judgeBranchAdd"), () => { PSJudgeAddDiceBranch(sc.id, node.id); PSUIRenderAll(); });
+		sec.appendChild(addBtn);
+	} else {
+		sec.appendChild(PSEl("div", { fontSize: "12px", color: "#6a7290" }, PSEsc(PST("judgeBranchMax"))));
+	}
 	box.appendChild(sec);
 }
 
@@ -5323,7 +5420,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_NICK_TOKEN, PSCharDisplayName, PSCharObjectOf, PSTriggerName, PSApplyTokens,
 		PS_TARGET_TOKEN, PSCharIsSelf, PSTargetInRoom,
 		PS_TIME_TOKEN, PSTimeHMToMin, PSTimeRuleMinutes, PSTimeRuleMatch, PSTimeRuleText, PSNormalizeTimeRules, PSNormalizeTimeTriggerRules, PSTimeTriggerScan,
-		PS_ROLL_TOKEN, PSJudgeRoll, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSAddNodeAfter, PSValidDiceExpr,
+		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSAddNodeAfter, PSValidDiceExpr,
 		PS_ACT_ALIASES,
 		PSFire, PSRun, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
 		PSInstallHooks, PSInputClear, PSHookWhen,
