@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.3.0";
+const PS_VERSION = "1.5.0";
  
 let PSLastOutfitBlocked = [];
  
@@ -149,8 +149,9 @@ const PSTypeMeta = {
 	action: { icon: "", color: "#ffd166" },
 	leave:  { icon: "", color: "#f08080" },
 	outfit: { icon: "👗", color: "#9fd8a0" },
+	judge:  { icon: "🎲", color: "#f0b3ff" },
 };
-const PSTypeNames = ["chat", "rp", "narr", "action", "leave", "outfit"];
+const PSTypeNames = ["chat", "rp", "narr", "action", "leave", "outfit", "judge"];
 
  
 
@@ -199,7 +200,14 @@ const PSStore = {
 				sc.roomTrigger = !!sc.roomTrigger;
 				sc.roomTriggerOnReconnect = sc.roomTriggerOnReconnect !== false;   
 				sc.playerTrigger = !!sc.playerTrigger;
-				sc.playerTarget = Number(sc.playerTarget) || 0;
+				
+				const legacyTarget = Number(sc.playerTarget) || 0;
+				sc.playerTargets = Array.isArray(sc.playerTargets)
+					? sc.playerTargets.filter((n) => Number.isInteger(n) && n > 0).slice(0, 50)
+					: (legacyTarget > 0 ? [legacyTarget] : []);
+				sc.playerTarget = sc.playerTargets[0] || 0;
+				sc.timeTrigger = !!sc.timeTrigger;
+				sc.timeRules = PSNormalizeTimeTriggerRules(sc.timeRules);
 				sc.cloudBio = !!sc.cloudBio;   
 				sc.nodes = Array.isArray(sc.nodes)
 					? sc.nodes.filter((n) => n && typeof n.id === "string").map((n) => {
@@ -218,6 +226,17 @@ const PSStore = {
 							outfitCos: PSOutfitFlagsFromNode(n).outfitCos,
 							outfitLocks: !!n.outfitLocks,
 							outfitGroups: Array.isArray(n.outfitGroups) ? n.outfitGroups.filter((g) => typeof g === "string") : null,
+							timeRules: PSNormalizeTimeRules(n.timeRules),
+							nextId: (typeof n.nextId === "string" && n.nextId) ? n.nextId : null,
+							yesId: (typeof n.yesId === "string" && n.yesId) ? n.yesId : null,
+							noId: (typeof n.noId === "string" && n.noId) ? n.noId : null,
+							judgeType: n.judgeType === "dice" ? "dice" : "coin",
+							coinYesIs: n.coinYesIs === "tails" ? "tails" : "heads",
+							diceExpr: PSValidDiceExpr(n.diceExpr) ? String(n.diceExpr).trim() : "1d6",
+							diceRule: n.diceRule === "lte" ? "lte" : "gte",
+							diceThreshold: PSClamp(Number(n.diceThreshold) || 4, 1, 100000),
+							showResult: n.showResult !== false,
+							judgeLineType: ["chat", "rp", "narr", "action"].includes(n.judgeLineType) ? n.judgeLineType : "chat",
 						};
 					})
 					: [];
@@ -705,6 +724,9 @@ function PSMakeDemoScript() {
 		roomTriggerOnReconnect: true,
 		playerTrigger: false,
 		playerTarget: 0,
+		playerTargets: [],
+		timeTrigger: false,
+		timeRules: [],
 		cloudBio: false,
 		nodes: [
 			{ id: "demo1n1", type: "rp", text: "从怀里掏出一个红苹果，在手里抛了抛", delay: 0.5, enabled: true },
@@ -742,6 +764,9 @@ function PSAddScript(name, keyword) {
 		roomTriggerOnReconnect: true,
 		playerTrigger: false,
 		playerTarget: 0,
+		playerTargets: [],
+		timeTrigger: false,
+		timeRules: [],
 		cloudBio: false,
 		nodes: [],
 	};
@@ -795,7 +820,20 @@ function PSUpdateScript(id, patch) {
 	if ("roomTrigger" in patch) sc.roomTrigger = !!patch.roomTrigger;
 	if ("roomTriggerOnReconnect" in patch) sc.roomTriggerOnReconnect = !!patch.roomTriggerOnReconnect;
 	if ("playerTrigger" in patch) sc.playerTrigger = !!patch.playerTrigger;
-	if ("playerTarget" in patch) sc.playerTarget = Number(patch.playerTarget) || 0;
+	if ("playerTarget" in patch) {
+		
+		const n = Number(patch.playerTarget) || 0;
+		sc.playerTargets = (n > 0) ? [n] : [];
+		sc.playerTarget = sc.playerTargets[0] || 0;
+	}
+	if ("playerTargets" in patch) {
+		sc.playerTargets = Array.isArray(patch.playerTargets)
+			? patch.playerTargets.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0).slice(0, 50)
+			: [];
+		sc.playerTarget = sc.playerTargets[0] || 0;
+	}
+	if ("timeTrigger" in patch) sc.timeTrigger = !!patch.timeTrigger;
+	if ("timeRules" in patch) sc.timeRules = PSNormalizeTimeTriggerRules(patch.timeRules);
 	if ("cloudBio" in patch) sc.cloudBio = !!patch.cloudBio;
 	PSStore.requestSave();
 	return true;
@@ -822,6 +860,17 @@ function PSAddNode(scriptId, node, atIdx) {
 		outfitLocks: !!(node && node.outfitLocks),
 		outfitItemsMode: (node && node.outfitItemsMode === "override") ? "override" : "add",   
 		outfitGroups: (node && Array.isArray(node.outfitGroups)) ? node.outfitGroups.filter((g) => typeof g === "string") : null,
+		timeRules: PSNormalizeTimeRules(node && node.timeRules),
+		nextId: (node && typeof node.nextId === "string" && node.nextId) ? node.nextId : null,
+		yesId: (node && typeof node.yesId === "string" && node.yesId) ? node.yesId : null,
+		noId: (node && typeof node.noId === "string" && node.noId) ? node.noId : null,
+		judgeType: (node && node.judgeType === "dice") ? "dice" : "coin",
+		coinYesIs: (node && node.coinYesIs === "tails") ? "tails" : "heads",
+		diceExpr: PSValidDiceExpr(node && node.diceExpr) ? String(node.diceExpr).trim() : "1d6",
+		diceRule: (node && node.diceRule === "lte") ? "lte" : "gte",
+		diceThreshold: PSClamp(Number((node && node.diceThreshold) || 4), 1, 100000),
+		showResult: !node || node.showResult !== false,
+		judgeLineType: (node && ["chat", "rp", "narr", "action"].includes(node.judgeLineType)) ? node.judgeLineType : "chat",
 	};
 	if (atIdx === undefined || atIdx === null || atIdx < 0) sc.nodes.push(n);
 	else sc.nodes.splice(PSClamp(atIdx, 0, sc.nodes.length), 0, n);
@@ -888,6 +937,17 @@ function PSUpdateNode(scriptId, nodeId, patch) {
 	if ("outfitLocks" in patch) n.outfitLocks = !!patch.outfitLocks;
 	if ("outfitItemsMode" in patch) n.outfitItemsMode = patch.outfitItemsMode === "override" ? "override" : "add";
 	if ("outfitGroups" in patch) n.outfitGroups = Array.isArray(patch.outfitGroups) ? patch.outfitGroups.filter((g) => typeof g === "string") : null;
+	if ("timeRules" in patch) n.timeRules = PSNormalizeTimeRules(patch.timeRules);
+	if ("nextId" in patch) n.nextId = (patch.nextId && typeof patch.nextId === "string") ? patch.nextId : null;
+	if ("yesId" in patch) n.yesId = (patch.yesId && typeof patch.yesId === "string") ? patch.yesId : null;
+	if ("noId" in patch) n.noId = (patch.noId && typeof patch.noId === "string") ? patch.noId : null;
+	if ("judgeType" in patch) n.judgeType = patch.judgeType === "dice" ? "dice" : "coin";
+	if ("coinYesIs" in patch) n.coinYesIs = patch.coinYesIs === "tails" ? "tails" : "heads";
+	if ("diceExpr" in patch) n.diceExpr = PSValidDiceExpr(patch.diceExpr) ? String(patch.diceExpr).trim() : (n.diceExpr || "1d6");
+	if ("diceRule" in patch) n.diceRule = patch.diceRule === "lte" ? "lte" : "gte";
+	if ("diceThreshold" in patch) n.diceThreshold = PSClamp(Number(patch.diceThreshold) || 4, 1, 100000);
+	if ("showResult" in patch) n.showResult = patch.showResult !== false;
+	if ("judgeLineType" in patch && ["chat", "rp", "narr", "action"].includes(patch.judgeLineType)) n.judgeLineType = patch.judgeLineType;
 	PSStore.requestSave();
 	return true;
 }
@@ -1062,6 +1122,7 @@ let PSActive = null;
 let PSQueue = [];
 const PSLastFire = {}; 
 let PSRoomRelogArmed = 0;   
+let PSTimeScanTimer = null; 
 
  
 function PSNormalizeText(t) {
@@ -1084,6 +1145,11 @@ function PSNormalizeCode(t) {
 const PS_NICK_TOKEN = "<nick>";
  
 const PS_TARGET_TOKEN = "<target>";
+
+ 
+const PS_TIME_TOKEN = "<time>";
+ 
+const PS_ROLL_TOKEN = "<roll>";
 
  
 function PSCharDisplayName(C) {
@@ -1138,11 +1204,217 @@ function PSTriggerName(num) {
 }
 
  
-function PSApplyTokens(text, triggerNum, targetNum) {
+function PSApplyTokens(text, triggerNum, targetNum, timeRules, rollLabel) {
 	let t = String(text ?? "");
 	t = t.split(PS_NICK_TOKEN).join(PSTriggerName(triggerNum));
 	t = t.split(PS_TARGET_TOKEN).join(PSTriggerName((targetNum === undefined || targetNum === null) ? triggerNum : targetNum));
+	t = t.split(PS_TIME_TOKEN).join(PSTimeRuleText(timeRules) ?? "");
+	const rl = (rollLabel === undefined || rollLabel === null)
+		? (PSActive && PSActive.lastJudge ? PSActive.lastJudge.label : "")
+		: rollLabel;
+	t = t.split(PS_ROLL_TOKEN).join(rl ?? "");
 	return t;
+}
+
+ 
+function PSTimeHMToMin(v) {
+	const s = String(v ?? "").trim();
+	const m = /^(\d{1,2}):(\d{2})$/.exec(s);
+	if (!m) return null;
+	const h = Number(m[1]), mi = Number(m[2]);
+	if (h > 24 || mi > 59 || (h === 24 && mi !== 0)) return null;
+	return h * 60 + mi;
+}
+
+ 
+function PSTimeRuleMinutes(tz) {
+	try {
+		const z = String(tz ?? "").trim();
+		if (!z || z === "local") {
+			const d = new Date();
+			return d.getHours() * 60 + d.getMinutes();
+		}
+		const m = /^UTC([+-])(\d{1,2})(?::(\d{2}))?$/i.exec(z);
+		if (m) {
+			const off = (parseInt(m[2], 10) || 0) * 60 + (parseInt(m[3], 10) || 0);
+			const d = new Date();
+			const utc = d.getUTCHours() * 60 + d.getUTCMinutes();
+			const sign = m[1] === "-" ? -1 : 1;
+			return (((utc + sign * off) % 1440) + 1440) % 1440;
+		}
+		const fmt = new Intl.DateTimeFormat("en-US", { timeZone: z, hour: "2-digit", minute: "2-digit", hour12: false });
+		const parts = fmt.formatToParts(new Date());
+		let h = 0, mi = 0;
+		for (const p of parts) {
+			if (p.type === "hour") h = Number(p.value) % 24;
+			else if (p.type === "minute") mi = Number(p.value);
+		}
+		return h * 60 + mi;
+	} catch (e) { return null; }
+}
+
+ 
+function PSTimeRuleMatch(rules, nowMin) {
+	if (!Array.isArray(rules)) return null;
+	for (const r of rules) {
+		if (!r) continue;
+		const from = PSTimeHMToMin(r.from);
+		const to = PSTimeHMToMin(r.to);
+		if (from == null || to == null) continue;
+		const now = (nowMin === undefined || nowMin === null) ? PSTimeRuleMinutes(r.tz) : nowMin;
+		if (now == null) continue;
+		const hit = from <= to ? (now >= from && now < to) : (now >= from || now < to);
+		if (hit) return r;
+	}
+	return null;
+}
+
+ 
+function PSTimeRuleText(rules, nowMin) {
+	const r = PSTimeRuleMatch(rules, nowMin);
+	return (r && typeof r.text === "string" && r.text.trim()) ? r.text : null;
+}
+
+ 
+function PSNormalizeTimeRules(arr) {
+	if (!Array.isArray(arr)) return [];
+	const out = [];
+	for (const r of arr) {
+		if (!r || typeof r !== "object") continue;
+		const from = PSTimeHMToMin(r.from);
+		const to = PSTimeHMToMin(r.to);
+		if (from == null || to == null) continue;
+		const text = String(r.text ?? "").trim().slice(0, 200);
+		if (!text) continue;
+		out.push({
+			id: typeof r.id === "string" ? r.id : PSUid("tr"),
+			from: String(r.from).trim(),
+			to: String(r.to).trim(),
+			tz: String(r.tz ?? "").trim().slice(0, 64),
+			text,
+		});
+	}
+	return out;
+}
+
+ 
+function PSNormalizeTimeTriggerRules(arr) {
+	if (!Array.isArray(arr)) return [];
+	const out = [];
+	for (const r of arr) {
+		if (!r || typeof r !== "object") continue;
+		const from = PSTimeHMToMin(r.from);
+		const to = PSTimeHMToMin(r.to);
+		if (from == null || to == null) continue;
+		out.push({
+			id: typeof r.id === "string" ? r.id : PSUid("tt"),
+			from: String(r.from).trim(),
+			to: String(r.to).trim(),
+			tz: String(r.tz ?? "").trim().slice(0, 64),
+		});
+	}
+	return out;
+}
+
+ 
+function PSTimeTriggerScan() {
+	try {
+		if (!PSStore.state) return;
+		if (!PSCanSend()) return;
+		const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
+		for (const sc of PSStore.state.scripts) {
+			if (sc.enabled === false || !sc.timeTrigger) continue;
+			if (!PSTimeRuleMatch(sc.timeRules)) continue;
+			PSLog("时间触发：", sc.name);
+			PSFire(sc.id, { senderNum: me });
+		}
+	} catch (e) { PSErr(e); }
+}
+
+ 
+
+ 
+function PSValidDiceExpr(v) {
+	const s = String(v ?? "").trim();
+	const m = /^(\d{1,3})[dD](\d{1,4})$/.exec(s);
+	return !!m && Number(m[1]) >= 1 && Number(m[2]) >= 2;
+}
+
+ 
+function PSJudgeRoll(node) {
+	try {
+		if (node && node.judgeType === "dice") {
+			const m = /^(\d{1,3})[dD](\d{1,4})$/.exec(String(node.diceExpr || "1d6"));
+			const n = m ? Math.min(Number(m[1]), 100) : 1;
+			const sides = m ? Math.min(Number(m[2]), 100000) : 6;
+			let total = 0;
+			for (let i = 0; i < n; i++) total += Math.floor(Math.random() * sides) + 1;
+			const th = Math.min(100000, Math.max(1, Number(node.diceThreshold) || 4));
+			const yes = node.diceRule === "lte" ? (total <= th) : (total >= th);
+			return { yes, label: String(total) };
+		}
+		const heads = Math.random() < 0.5;
+		const yes = (node && node.coinYesIs === "tails") ? !heads : heads;
+		return { yes, label: heads ? "正" : "反" };
+	} catch (e) { return { yes: false, label: "?" }; }
+}
+
+ 
+function PSNodeEdges(nodes) {
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+	const edges = new Map(nodes.map((n) => [n.id, []]));
+	nodes.forEach((n, i) => {
+		if (n.type === "judge") {
+			if (n.yesId && byId.has(n.yesId)) edges.get(n.id).push(n.yesId);
+			if (n.noId && byId.has(n.noId)) edges.get(n.id).push(n.noId);
+		} else if (n.nextId && byId.has(n.nextId)) {
+			edges.get(n.id).push(n.nextId);
+		} else if (nodes[i + 1]) {
+			edges.get(n.id).push(nodes[i + 1].id);
+		}
+	});
+	return edges;
+}
+
+ 
+function PSNodeConnectionWouldCycle(nodes, fromId, toId) {
+	if (!Array.isArray(nodes) || !fromId || !toId) return true;
+	if (fromId === toId) return true;
+	const edges = PSNodeEdges(nodes);
+	const seen = new Set([fromId]);
+	const stack = [toId];
+	while (stack.length) {
+		const cur = stack.pop();
+		if (cur === fromId) return true;
+		if (seen.has(cur)) continue;
+		seen.add(cur);
+		(edges.get(cur) || []).forEach((x) => stack.push(x));
+	}
+	return false;
+}
+
+ 
+function PSNodeConnect(scriptId, nodeId, port, targetId) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return { ok: false, why: "noscript" };
+	const node = sc.nodes.find((n) => n.id === nodeId);
+	const target = sc.nodes.find((n) => n.id === targetId);
+	if (!node || !target) return { ok: false, why: "bad" };
+	if (PSNodeConnectionWouldCycle(sc.nodes, nodeId, targetId)) {
+		try { PSToast(PST("connectWouldLoop")); } catch (e) {   }
+		return { ok: false, why: "loop" };
+	}
+	const patch = port === "yes" ? { yesId: targetId } : (port === "no" ? { noId: targetId } : { nextId: targetId });
+	PSUpdateNode(sc.id, nodeId, patch);
+	return { ok: true };
+}
+
+ 
+function PSNodeDisconnect(scriptId, nodeId, port) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return false;
+	const patch = port === "yes" ? { yesId: null } : (port === "no" ? { noId: null } : { nextId: null });
+	return PSUpdateNode(sc.id, nodeId, patch);
 }
 
  
@@ -1272,6 +1544,19 @@ function PSSendLeave(node) {
 }
 
 const PSSendByType = { chat: PSSendChat, rp: PSSendRp, narr: PSSendNarr, action: PSSendAction, leave: PSSendLeave, outfit: PSSendOutfit };
+
+ 
+function PSSendJudge(node) {
+	const res = PSJudgeRoll(node);
+	if (PSActive) PSActive.lastJudge = res;
+	if (node && node.showResult !== false) {
+		const text = PSApplyTokens(node.text, PSActive ? PSActive.triggerNum : null, PSActive ? PSActive.targetNum : null, node.timeRules, res.label);
+		const send = PSSendByType[node.judgeLineType] || PSSendChat;
+		try { send(text); } catch (e) { PSErr("PSSendJudge", e); }
+	}
+	return true;
+}
+PSSendByType.judge = PSSendJudge;
 
  
 
@@ -1625,9 +1910,9 @@ function PSSendNode(node) {
 	if (!fn) return "blocked";
 	const triggerNum = PSActive ? PSActive.triggerNum : null;
 	const targetNum = PSActive ? PSActive.targetNum : null;
-	const text = PSApplyTokens(node.text, triggerNum, targetNum);
+	const text = PSApplyTokens(node.text, triggerNum, targetNum, node.timeRules);
 	
-	const arg = (node.type === "leave" || node.type === "outfit") ? node : text;
+	const arg = (node.type === "leave" || node.type === "outfit" || node.type === "judge") ? node : text;
 	try { return fn(arg) ? "sent" : "blocked"; }
 	catch (e) { PSErr("PSSendNode", e); return "blocked"; }
 }
@@ -1638,7 +1923,7 @@ function PSFire(scriptId, opts) {
 	const s = PSFindScript(scriptId);
 	if (!s) return { ok: false, why: "noscript" };
 	if (s.enabled === false && !opts.manual) return { ok: false, why: "disabled" };
-	const enabledNodes = s.nodes.filter((n) => n.enabled !== false && (n.type === "leave" || PSNormalizeText(n.text)));
+	const enabledNodes = s.nodes.filter((n) => n.enabled !== false && (n.type === "leave" || n.type === "judge" || PSNormalizeText(n.text)));
 	if (!enabledNodes.length) { PSToast(PST("toastEmptyNodes", s.name)); return { ok: false, why: "empty" }; }
 	if (!PSCanSend()) { PSToast(PST("toastNeedRoom")); return { ok: false, why: "noroom" }; }
 
@@ -1694,6 +1979,17 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			outfitLocks: !!n.outfitLocks,
 			outfitItemsMode: n.outfitItemsMode === "override" ? "override" : "add",
 			outfitGroups: Array.isArray(n.outfitGroups) ? n.outfitGroups.slice() : null,
+			timeRules: Array.isArray(n.timeRules) ? n.timeRules.slice() : [],
+			nextId: (typeof n.nextId === "string" && n.nextId) ? n.nextId : null,
+			yesId: (typeof n.yesId === "string" && n.yesId) ? n.yesId : null,
+			noId: (typeof n.noId === "string" && n.noId) ? n.noId : null,
+			judgeType: n.judgeType === "dice" ? "dice" : "coin",
+			coinYesIs: n.coinYesIs === "tails" ? "tails" : "heads",
+			diceExpr: PSValidDiceExpr(n.diceExpr) ? String(n.diceExpr) : "1d6",
+			diceRule: n.diceRule === "lte" ? "lte" : "gte",
+			diceThreshold: Number(n.diceThreshold) || 4,
+			showResult: n.showResult !== false,
+			judgeLineType: ["chat", "rp", "narr", "action"].includes(n.judgeLineType) ? n.judgeLineType : "chat",
 		})),
 		idx: -1,
 		timer: null,
@@ -1701,6 +1997,9 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 		startedAt: PSNow(),
 		triggerNum: (triggerNum === undefined ? null : triggerNum),
 		targetNum: (targetNum === undefined ? null : targetNum),
+		lastJudge: null,        
+		steps: 0,               
+		hasLinks: nodes.some((n) => (n.type === "judge" ? (!!n.yesId || !!n.noId) : !!n.nextId)),   
 	};
 	PSLog("演出开始：", s.name, "共", PSActive.nodes.length, "句");
 	PSToast(PST("toastStarted", s.name, PSActive.nodes.length));
@@ -1708,12 +2007,37 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 }
 
  
+function PSNodeNext(A, cur) {
+	if (cur.type === "judge") {
+		const j = A.lastJudge || { yes: false };
+		const id = j.yes ? cur.yesId : cur.noId;
+		return id ? (A.nodes.find((n) => n.id === id) || null) : null;
+	}
+	if (cur.nextId) {
+		const t = A.nodes.find((n) => n.id === cur.nextId);
+		if (t) return t;
+	}
+	
+	if (A.hasLinks) return null;
+	const idx = A.nodes.indexOf(cur);
+	return (idx >= 0 && idx < A.nodes.length - 1) ? A.nodes[idx + 1] : null;
+}
+
+ 
 function PSAdvance() {
 	const A = PSActive;
 	if (!A) return;
-	const next = A.nodes[A.idx + 1];
+	const cur = A.idx >= 0 ? A.nodes[A.idx] : null;
+	const next = cur ? PSNodeNext(A, cur) : A.nodes[0];
 	if (!next) { PSFinish(); return; }
-	A.idx++;
+	
+	A.steps = (A.steps || 0) + 1;
+	if (A.steps > Math.max(200, A.nodes.length * 20)) {
+		PSErr("判定连接疑似成环，已中止演出");
+		PSAbortCore(false, "loop");
+		return;
+	}
+	A.idx = A.nodes.indexOf(next);
 	const waitMs = Math.max(0, (Number(next.delay) || 0) * 1000);
 	A.nextAt = PSNow() + waitMs;
 	A.timer = setTimeout(() => {
@@ -2101,9 +2425,12 @@ function PSInstallHooks(mod) {
 					PSLog("进房触发：", sc.name);
 					PSFire(sc.id, { senderNum: me });
 				}
-				if (sc.playerTrigger && Number.isInteger(sc.playerTarget) && sc.playerTarget > 0 && PSTargetInRoom(sc.playerTarget)) {
-					PSLog("进房见到玩家触发：", sc.name, "#" + sc.playerTarget);
-					PSFire(sc.id, { senderNum: me, targetNum: sc.playerTarget });
+				if (sc.playerTrigger && Array.isArray(sc.playerTargets) && sc.playerTargets.length) {
+					const inRoom = sc.playerTargets.find((num) => PSTargetInRoom(num));
+					if (inRoom) {
+						PSLog("进房见到玩家触发：", sc.name, "#" + inRoom);
+						PSFire(sc.id, { senderNum: me, targetNum: inRoom });
+					}
 				}
 			}
 		});
@@ -2126,7 +2453,7 @@ function PSInstallHooks(mod) {
 			if (num === me) return;   
 			for (const sc of PSStore.state.scripts) {
 				if (sc.enabled === false) continue;
-				if (sc.playerTrigger && sc.playerTarget === num) {
+				if (sc.playerTrigger && Array.isArray(sc.playerTargets) && sc.playerTargets.includes(num)) {
 					PSLog("玩家进房触发：", sc.name, "#" + num);
 					PSFire(sc.id, { senderNum: me, targetNum: num });
 				}
@@ -2168,6 +2495,11 @@ function PSMain() {
 			PSUI.lang = PSStorage.get("PlayScriptLang") === "en" ? "en" : "zh";
 			PSExposeAPI();
 			PSInstallHooks(mod);
+			
+			if (PSTimeScanTimer) { clearInterval(PSTimeScanTimer); PSTimeScanTimer = null; }
+			try {
+				PSTimeScanTimer = setInterval(() => { try { PSTimeTriggerScan(); } catch (e) { PSErr(e); } }, 15000);
+			} catch (e) {   }
 			if (typeof window !== "undefined") window.PlayScriptInstalled = true;
 			
 			try { PSUIDotBuild(); } catch (e) { PSErr("小圆点按钮构建失败", e); }
@@ -2240,8 +2572,10 @@ const PSText = {
 		otherHint: "进房自动演出；见到指定玩家（对方进房 / 你进房时对方已在）也会触发（<target>=对方昵称）",
 		roomTrigger: "进入房间触发",
 		roomTriggerOnReconnect: "重连回房间时也触发",
+		timeTrigger: "根据时间触发",
+		timeTriggerHint: "设置一个或多个时间段+时区，当前时间命中即自动触发（只在聊天室内检查，每 15 秒一次）",
 		playerTrigger: "见到玩家触发",
-		playerTargetId: "玩家数字ID",
+		playerTargetId: "玩家数字ID（可多个）",
 		dupScript: "复制剧本",
 		delScript: "删除剧本",
 		delScriptConfirm: "确认删除",
@@ -2257,6 +2591,33 @@ const PSText = {
 		forceLeave: "强行离开",
 		forceLeaveHint: "勾选后跳过游戏的离房资格检查（被牵引绳拴住/无法行走/监狱/锁房等受限状态）与缓慢离房，立即离开并切回找房界面",
 		typeOutfit: "服装道具变更",
+		typeJudge: "判定",
+		judgeEdit: "判定设置",
+		judgeType: "判定类型",
+		judgeCoin: "硬币（正/反）",
+		judgeDice: "骰子",
+		judgeCoinYesIs: "走「是」的一面",
+		judgeCoinHeads: "正面 → 是",
+		judgeCoinTails: "反面 → 是",
+		judgeDiceExpr: "骰子指令",
+		judgeDiceRule: "判定方式",
+		judgeDiceThreshold: "阈值",
+		judgeGte: "≥ 阈值 → 是",
+		judgeLte: "≤ 阈值 → 是",
+		judgeShowResult: "显示判定结果",
+		judgeLineType: "结果台词类型",
+		insertRoll: "插入判定结果",
+		addJudge: "+ 添加判定",
+		connectBtn: "连接…",
+		connectDisconnect: "断开",
+		connectHint: "连到某个节点作为下一句",
+		connectWinTitle: "连接到：{0}",
+		connectNone: "未连接",
+		connectYes: "是",
+		connectNo: "否",
+		connectNext: "下一句",
+		connectNextLabel: "连接下一句",
+		connectWouldLoop: "这样连接会循环演出刷屏，已取消本次连接",
 		outfitHint: "粘贴 BCX 服装代码（在 BCX 衣柜里导出的服装/物品代码，LZString 或 JSON 格式，长代码也支持）；演出时应用到目标角色；应用走游戏权限校验",
 		outfitTargetLabel: "应用目标",
 		outfitTargetSelf: "对自己",
@@ -2295,7 +2656,16 @@ const PSText = {
 		nodeEnabled: "启用该句",
 		insertNick: "插入昵称占位符",
 		insertTarget: "插入目标占位符",
+		insertTime: "插入时间判定",
 		nickHint: "演出时 <nick> 换成触发者昵称、<target> 换成目标昵称（没有目标时=触发者）",
+		timeRuleSection: "时间判定台词（<time>）",
+		timeRuleHint: "从上到下匹配，命中第一条即替换 <time>；没有命中 → 替换为空。时间用 24 小时制；时区可填 local、UTC+8、UTC-5:30，或 Asia/Shanghai、America/New_York 等；支持跨午夜（如 22:00~02:00）",
+		timeRuleFrom: "开始时间",
+		timeRuleTo: "结束时间",
+		timeRuleTz: "时区",
+		timeRuleText: "替换台词",
+		timeRuleTextPh: "替换成…",
+		timeRuleAdd: "添加时间段",
 		insAfter: "在下方插入",
 		insBefore: "在上方插入",
 		moveUp: "上移",
@@ -2413,8 +2783,10 @@ const PSText = {
 		otherHint: "Auto-play on room enter; also triggers when the target player enters the room or is already in a room you enter (<target> = their nickname)",
 		roomTrigger: "Trigger on room enter",
 		roomTriggerOnReconnect: "Also trigger when reconnecting back into the room",
+		timeTrigger: "Trigger by time",
+		timeTriggerHint: "Add one or more time ranges + timezones; the script fires when the current time matches (checked every 15s, only while in a chat room)",
 		playerTrigger: "Trigger on seeing player",
-		playerTargetId: "Player ID (number)",
+		playerTargetId: "Player IDs (multiple ok)",
 		dupScript: "Duplicate",
 		delScript: "Delete script",
 		delScriptConfirm: "Confirm delete",
@@ -2430,6 +2802,33 @@ const PSText = {
 		forceLeave: "Force leave",
 		forceLeaveHint: "Bypasses the game's leave restrictions (leashed / can't walk / prison / locked room) and slow-leave, leaving immediately",
 		typeOutfit: "Outfit change",
+		typeJudge: "Judge",
+		judgeEdit: "Judge settings",
+		judgeType: "Judge type",
+		judgeCoin: "Coin (heads/tails)",
+		judgeDice: "Dice",
+		judgeCoinYesIs: "Side that means yes",
+		judgeCoinHeads: "Heads → yes",
+		judgeCoinTails: "Tails → yes",
+		judgeDiceExpr: "Dice roll",
+		judgeDiceRule: "Rule",
+		judgeDiceThreshold: "Threshold",
+		judgeGte: "≥ threshold → yes",
+		judgeLte: "≤ threshold → yes",
+		judgeShowResult: "Show the result",
+		judgeLineType: "Result line type",
+		insertRoll: "Insert result tag",
+		addJudge: "+ Add judge",
+		connectBtn: "Connect…",
+		connectDisconnect: "Disconnect",
+		connectHint: "Connect to a node as the next line",
+		connectWinTitle: "Connect to: {0}",
+		connectNone: "Not connected",
+		connectYes: "Yes",
+		connectNo: "No",
+		connectNext: "Next",
+		connectNextLabel: "Connect next",
+		connectWouldLoop: "This connection would loop the show forever; it was cancelled",
 		outfitHint: "Paste a BCX clothing code (exported from the BCX wardrobe, LZString or JSON format); applied to the target at play time with game permission checks",
 		outfitTargetLabel: "Apply to",
 		outfitTargetSelf: "Self",
@@ -2468,7 +2867,16 @@ const PSText = {
 		nodeEnabled: "Enable this line",
 		insertNick: "Insert name tag",
 		insertTarget: "Insert target tag",
+		insertTime: "Insert time tag",
 		nickHint: "<nick> = triggerer's nickname, <target> = target's nickname (fallback = triggerer)",
+		timeRuleSection: "Time-based line (<time>)",
+		timeRuleHint: "Matched top to bottom: the first matching range replaces <time>; no match → empty. 24-hour times. Timezone can be local, UTC+8, UTC-5:30, or Asia/Shanghai, America/New_York, etc. Cross-midnight ranges (e.g. 22:00~02:00) are supported",
+		timeRuleFrom: "From",
+		timeRuleTo: "To",
+		timeRuleTz: "Timezone",
+		timeRuleText: "Replacement text",
+		timeRuleTextPh: "Replace with…",
+		timeRuleAdd: "Add time range",
 		insAfter: "Insert below",
 		insBefore: "Insert above",
 		moveUp: "Move up",
@@ -2557,6 +2965,7 @@ const PSUI = {
 	outfitWin: null, outfitOpen: false, outfitScriptId: null, outfitNodeId: null,
 	outfitCodeGroups: [], outfitPickable: [], outfitBundle: [], outfitSel: [], outfitHover: null,
 	outfitTitleEl: null, outfitChipEl: null, outfitCanvas: null,
+	connectWin: null, connectTitleEl: null, connectListEl: null, connectScriptId: null, connectNodeId: null, connectPort: "next",
 	dot: null,
 	toastEl: null, toastTimer: null,
 	win: { x: null, y: null, w: 1000, h: 640, minimized: false },
@@ -3017,13 +3426,29 @@ function PSUINodeColor(type) {
 }
 
 function PSUITypeLabel(type) {
-	return PST({ chat: "typeChat", rp: "typeRp", narr: "typeNarr", action: "typeAction", leave: "typeLeave", outfit: "typeOutfit" }[type] || "typeChat");
+	return PST({ chat: "typeChat", rp: "typeRp", narr: "typeNarr", action: "typeAction", leave: "typeLeave", outfit: "typeOutfit", judge: "typeJudge" }[type] || "typeChat");
 }
 
 function PSUIDelayText(delay) {
 	const d = Number(delay) || 0;
 	if (d <= 0) return PST("delayNow");
 	return PST("delayChip", (Math.round(d * 100) / 100));
+}
+
+ 
+function PSUIOutgoingLine(sc, n, port) {
+	const el = PSEl("div", { textAlign: "center", padding: "1px 0 4px", lineHeight: "1.4" });
+	const id = port === "yes" ? n.yesId : (port === "no" ? n.noId : n.nextId);
+	const target = id ? PSUINodeTargetLabel(sc, id) : null;
+	const head = port === "yes" ? PST("connectYes") : (port === "no" ? PST("connectNo") : "↓");
+	el.appendChild(PSEl("span", {
+		display: "inline-block", padding: "2px 10px", fontSize: "12px", borderRadius: "10px",
+		background: target ? "#2a2140" : "#1c1e2a",
+		color: target ? "#d9c2ff" : "#6a7290",
+		border: "1px solid " + (target ? "#9f7fd0" : PS_BORDER),
+		maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+	}, PSEsc(head + " → " + (target ? target : PST("connectNone")))));
+	return el;
 }
 
 function PSUIFlowBuild() {
@@ -3129,7 +3554,7 @@ function PSUIFlowBuild() {
 		const preview = PSEl("div", {
 			fontSize: "13px", color: PS_TEXT, marginTop: "3px", whiteSpace: "pre-wrap",
 			maxHeight: "42px", overflow: "hidden", wordBreak: "break-word",
-		}, PSEsc(n.type === "leave" ? PST("leavePreview") : (n.type === "outfit" ? (PST("outfitPreview") + "：" + PSUINodePreview(n.text)) : PSUINodePreview(n.text))));
+		}, PSEsc(n.type === "leave" ? PST("leavePreview") : (n.type === "outfit" ? (PST("outfitPreview") + "：" + PSUINodePreview(n.text)) : (n.type === "judge" ? PSUIJudgePreview(n) : PSUINodePreview(n.text)))));
 		mid.appendChild(preview);
 		card.appendChild(mid);
 
@@ -3146,9 +3571,18 @@ function PSUIFlowBuild() {
 
 		box.appendChild(card);
 		PSUI.flowCards.push({ id: n.id, el: card, previewEl: preview });
+
+		 
+		if (n.type === "judge") {
+			box.appendChild(PSUIOutgoingLine(sc, n, "yes"));
+			box.appendChild(PSUIOutgoingLine(sc, n, "no"));
+		} else if (n.nextId) {
+			box.appendChild(PSUIOutgoingLine(sc, n, "next"));
+		}
 	});
 
 	 
+	const addRow = PSEl("div", { display: "flex", gap: "8px", margin: "12px 0 20px" });
 	const addBtn = PSBigBtn(PST("addNode"), () => {
 		const sc2 = PSFindScript(PSUI.selScriptId);
 		if (!sc2) { PSToast(PST("toastNoSelScript")); return; }
@@ -3160,15 +3594,44 @@ function PSUIFlowBuild() {
 			PSUIRenderAll();
 		}
 	}, { bg: "#2c7a70" });
-	addBtn.style.margin = "12px 0 20px";
-	addBtn.style.width = "100%";
-	box.appendChild(addBtn);
+	addBtn.style.flex = "1";
+	addRow.appendChild(addBtn);
+	const addJudgeBtn = PSBigBtn(PST("addJudge"), () => {
+		const sc2 = PSFindScript(PSUI.selScriptId);
+		if (!sc2) { PSToast(PST("toastNoSelScript")); return; }
+		const n = PSAddNode(sc2.id, { type: "judge", text: "", delay: 0, enabled: true, showResult: true });
+		if (n) {
+			PSUI.selNodeId = n.id;
+			PSUI.selTrigger = false;
+			PSUI.focusRequest = true;
+			PSUIRenderAll();
+		}
+	}, { bg: "#5a3d7a" });
+	addJudgeBtn.style.flex = "1";
+	addRow.appendChild(addJudgeBtn);
+	box.appendChild(addRow);
 }
 
 function PSUINodePreview(text) {
 	const t = String(text ?? "").replace(/\s+/g, " ").trim();
 	if (!t) return "(空)";
 	return t.length > 80 ? t.slice(0, 80) + "…" : t;
+}
+
+ 
+function PSUIJudgePreview(n) {
+	if (n && n.judgeType === "dice") {
+		const rule = n.diceRule === "lte" ? "≤" : "≥";
+		return "🎲 " + (n.diceExpr || "1d6") + " " + rule + " " + (n.diceThreshold || 4) + " → 是";
+	}
+	return "🪙 硬币：" + ((n && n.coinYesIs === "tails") ? "反面 → 是" : "正面 → 是");
+}
+
+ 
+function PSUINodeTargetLabel(sc, id) {
+	const t = sc && Array.isArray(sc.nodes) ? sc.nodes.find((n) => n.id === id) : null;
+	if (!t) return null;
+	return PSUITypeLabel(t.type) + "：" + (t.type === "judge" ? PSUIJudgePreview(t) : PSUINodePreview(t.text));
 }
 
  
@@ -3887,8 +4350,56 @@ function PSUITriggerSection(box, sc) {
 	plCb.addEventListener("change", () => { PSUpdateScript(sc.id, { playerTrigger: plCb.checked }); PSUIRenderAll(); });
 	plRow.appendChild(plCb);
 	otherSec.appendChild(plRow);
-	const plIdInp = PSUIInput(String(sc.playerTarget || ""), (v) => { PSUpdateScript(sc.id, { playerTarget: v }); PSUIRenderAll(); }, { type: "number", min: "1", step: "1", placeholder: "12345" });
+	const plIdInp = PSUIInput((Array.isArray(sc.playerTargets) ? sc.playerTargets : []).join("、"), (v) => {
+		const nums = String(v || "").split(/[、,，\s]+/).map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0).slice(0, 50);
+		PSUpdateScript(sc.id, { playerTargets: nums });
+		PSUIRenderAll();
+	}, { type: "text", placeholder: "12345、67890" });
 	otherSec.appendChild(PSUIEditorRow(PST("playerTargetId"), plIdInp));
+
+	
+	const ttRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const ttLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	ttLab.textContent = PST("timeTrigger");
+	ttRow.appendChild(ttLab);
+	const ttCb = document.createElement("input");
+	ttCb.type = "checkbox";
+	ttCb.checked = !!sc.timeTrigger;
+	ttCb.addEventListener("change", () => { PSUpdateScript(sc.id, { timeTrigger: ttCb.checked }); PSUIRenderAll(); });
+	ttRow.appendChild(ttCb);
+	otherSec.appendChild(ttRow);
+	if (sc.timeTrigger) {
+		const tsec = PSEl("div", { padding: "6px 8px", borderRadius: "6px", background: "#141a2c", marginBottom: "8px" });
+		const tHint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "6px" });
+		tHint.textContent = PST("timeTriggerHint");
+		tsec.appendChild(tHint);
+		const tRules = Array.isArray(sc.timeRules) ? sc.timeRules.slice() : [];
+		const commitT = (next) => { PSUpdateScript(sc.id, { timeRules: next }); PSUIRenderAll(); };
+		const setTField = (rid, key, val) => commitT(tRules.map((r) => (r.id === rid ? Object.assign({}, r, { [key]: val }) : r)));
+		const delTRule = (rid) => commitT(tRules.filter((r) => r.id !== rid));
+		tRules.forEach((r) => {
+			const row = PSEl("div", { display: "flex", gap: "6px", alignItems: "center", marginBottom: "6px" });
+			const fromInp = PSUIInput(r.from || "06:00", (v) => setTField(r.id, "from", v), { type: "time" });
+			fromInp.title = PST("timeRuleFrom");
+			row.appendChild(fromInp);
+			row.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "12px" }, "~"));
+			const toInp = PSUIInput(r.to || "11:00", (v) => setTField(r.id, "to", v), { type: "time" });
+			toInp.title = PST("timeRuleTo");
+			row.appendChild(toInp);
+			const tzInp = PSUIInput(r.tz || "", (v) => setTField(r.id, "tz", v), { placeholder: "UTC+8 / local" });
+			tzInp.title = PST("timeRuleTz");
+			tzInp.style.minWidth = "86px";
+			tzInp.style.flex = "0 1 120px";
+			row.appendChild(tzInp);
+			const delBtn = PSSmallBtn("✕", () => delTRule(r.id), { bg: "#5a2c3a" });
+			delBtn.title = PST("delScript");
+			row.appendChild(delBtn);
+			tsec.appendChild(row);
+		});
+		const addT = PSSmallBtn(PST("timeRuleAdd"), () => commitT(tRules.concat([{ id: PSUid("tt"), from: "06:00", to: "11:00", tz: "UTC+8" }])));
+		tsec.appendChild(addT);
+		otherSec.appendChild(tsec);
+	}
 	sec1.appendChild(otherSec);
 	box.appendChild(sec1);
 }
@@ -3919,6 +4430,7 @@ function PSUINodeEditor(box, sc, node) {
 
 	const isLeave = node.type === "leave";
 	const isOutfit = node.type === "outfit";
+	const isJudge = node.type === "judge";
 	if (isLeave) {
 		
 		const leaveHint = PSEl("div", {
@@ -4035,6 +4547,8 @@ function PSUINodeEditor(box, sc, node) {
 			}, PSEsc(chipText)));
 			sec2.appendChild(pickRow);
 		}
+	} else if (isJudge) {
+		PSUIJudgeEditor(sec2, sc, node);
 	} else {
 		const ta = document.createElement("textarea");
 		ta.rows = 4;
@@ -4069,8 +4583,22 @@ function PSUINodeEditor(box, sc, node) {
 		const tagBtn2 = PSSmallBtn(PST("insertTarget"), () => insertToken(PS_TARGET_TOKEN));
 		tagBtn2.title = PS_TARGET_TOKEN;
 		tagRow.appendChild(tagBtn2);
+		const tagBtn3 = PSSmallBtn(PST("insertTime"), () => { insertToken(PS_TIME_TOKEN); PSUIRenderAll(); });
+		tagBtn3.title = PS_TIME_TOKEN;
+		tagRow.appendChild(tagBtn3);
+		const tagBtn4 = PSSmallBtn(PST("insertRoll"), () => { insertToken(PS_ROLL_TOKEN); PSUIRenderAll(); });
+		tagBtn4.title = PS_ROLL_TOKEN;
+		tagRow.appendChild(tagBtn4);
 		tagRow.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "12px" }, PSEsc(PST("nickHint"))));
 		sec2.appendChild(tagRow);
+
+		
+		if (String(node.text || "").indexOf(PS_TIME_TOKEN) >= 0) {
+			PSUITimeRuleSection(sec2, sc, node);
+		}
+
+		
+		PSUIConnectEditorRow(sec2, sc, node, "next");
 	}
 
 	const enRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
@@ -4103,6 +4631,159 @@ function PSUINodeEditor(box, sc, node) {
 }
 
  
+function PSUITimeRuleSection(box, sc, node) {
+	const sec = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#1a2134", border: "1px solid " + PS_BORDER, marginBottom: "8px" });
+	sec.appendChild(PSEl("div", { fontWeight: "700", fontSize: "13px", color: PS_ACCENT, marginBottom: "6px" }, PSEsc(PST("timeRuleSection"))));
+	const hint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px", lineHeight: "1.5" });
+	hint.textContent = PST("timeRuleHint");
+	sec.appendChild(hint);
+
+	const rules = Array.isArray(node.timeRules) ? node.timeRules.slice() : [];
+	const commit = (nextRules) => { PSUpdateNode(sc.id, node.id, { timeRules: nextRules }); PSUIRenderAll(); };
+	const setField = (rid, key, val) => {
+		const next = rules.map((r) => (r.id === rid ? Object.assign({}, r, { [key]: val }) : r));
+		commit(next);
+	};
+	const delRule = (rid) => commit(rules.filter((r) => r.id !== rid));
+
+	rules.forEach((r) => {
+		const row = PSEl("div", { display: "flex", gap: "6px", alignItems: "center", marginBottom: "6px" });
+		const fromInp = PSUIInput(r.from || "06:00", (v) => setField(r.id, "from", v), { type: "time" });
+		fromInp.title = PST("timeRuleFrom");
+		row.appendChild(fromInp);
+		row.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "12px" }, "~"));
+		const toInp = PSUIInput(r.to || "11:00", (v) => setField(r.id, "to", v), { type: "time" });
+		toInp.title = PST("timeRuleTo");
+		row.appendChild(toInp);
+		const tzInp = PSUIInput(r.tz || "", (v) => setField(r.id, "tz", v), { placeholder: "UTC+8 / local" });
+		tzInp.title = PST("timeRuleTz");
+		tzInp.style.minWidth = "86px";
+		tzInp.style.flex = "0 1 110px";
+		row.appendChild(tzInp);
+		const textInp = PSUIInput(r.text || "", (v) => setField(r.id, "text", v), { placeholder: PST("timeRuleTextPh") });
+		textInp.title = PST("timeRuleText");
+		row.appendChild(textInp);
+		const delBtn = PSSmallBtn("✕", () => delRule(r.id), { bg: "#5a2c3a" });
+		delBtn.title = PST("delScript");
+		row.appendChild(delBtn);
+		sec.appendChild(row);
+	});
+
+	const addBtn = PSSmallBtn(PST("timeRuleAdd"), () => {
+		const next = rules.concat([{ id: PSUid("tr"), from: "06:00", to: "11:00", tz: "UTC+8", text: "" }]);
+		commit(next);
+	});
+	sec.appendChild(addBtn);
+	box.appendChild(sec);
+}
+
+ 
+function PSUIConnectEditorRow(box, sc, node, port) {
+	const id = port === "yes" ? node.yesId : (port === "no" ? node.noId : node.nextId);
+	const row = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const lab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	lab.textContent = port === "yes" ? PST("connectYes") : (port === "no" ? PST("connectNo") : PST("connectNextLabel"));
+	row.appendChild(lab);
+	if (id) {
+		const t = PSUINodeTargetLabel(sc, id);
+		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+		info.textContent = t || id;
+		info.title = t || id;
+		row.appendChild(info);
+		const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, node.id, port); PSUIRenderAll(); });
+		row.appendChild(disc);
+	} else {
+		const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, port));
+		row.appendChild(btn);
+		row.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc(PST("connectHint"))));
+	}
+	box.appendChild(row);
+}
+
+ 
+function PSUIJudgeEditor(box, sc, node) {
+	const sec = PSEl("div", { padding: "10px", borderRadius: "8px", background: "#1f1830", border: "1px solid #9f7fd0", marginBottom: "8px" });
+	sec.appendChild(PSEl("div", { fontWeight: "700", marginBottom: "8px", color: "#f0b3ff" }, PSEsc(PST("judgeEdit"))));
+
+	
+	const typeSel = PSUISelect(node.judgeType === "dice" ? "dice" : "coin", [
+		'<option value="coin">' + PSEsc(PST("judgeCoin")) + "</option>",
+		'<option value="dice">' + PSEsc(PST("judgeDice")) + "</option>",
+	].join(""), (v) => { PSUpdateNode(sc.id, node.id, { judgeType: v }); PSUIRenderAll(); });
+	sec.appendChild(PSUIEditorRow(PST("judgeType"), typeSel));
+
+	if (node.judgeType === "dice") {
+		const exprInp = PSUIInput(node.diceExpr || "1d6", (v) => { PSUpdateNode(sc.id, node.id, { diceExpr: v }); PSUIRenderAll(); }, { placeholder: "1d6 / 1d100 / 2d100" });
+		sec.appendChild(PSUIEditorRow(PST("judgeDiceExpr"), exprInp));
+		const ruleSel = PSUISelect(node.diceRule === "lte" ? "lte" : "gte", [
+			'<option value="gte">' + PSEsc(PST("judgeGte")) + "</option>",
+			'<option value="lte">' + PSEsc(PST("judgeLte")) + "</option>",
+		].join(""), (v) => { PSUpdateNode(sc.id, node.id, { diceRule: v }); PSUIRenderAll(); });
+		sec.appendChild(PSUIEditorRow(PST("judgeDiceRule"), ruleSel));
+		const thInp = PSUIInput(String(node.diceThreshold || 4), (v) => { PSUpdateNode(sc.id, node.id, { diceThreshold: v }); PSUIRenderAll(); }, { type: "number", min: "1", step: "1" });
+		sec.appendChild(PSUIEditorRow(PST("judgeDiceThreshold"), thInp));
+	} else {
+		const coinSel = PSUISelect(node.coinYesIs === "tails" ? "tails" : "heads", [
+			'<option value="heads">' + PSEsc(PST("judgeCoinHeads")) + "</option>",
+			'<option value="tails">' + PSEsc(PST("judgeCoinTails")) + "</option>",
+		].join(""), (v) => { PSUpdateNode(sc.id, node.id, { coinYesIs: v }); PSUIRenderAll(); });
+		sec.appendChild(PSUIEditorRow(PST("judgeCoinYesIs"), coinSel));
+	}
+
+	
+	const showRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const showLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	showLab.textContent = PST("judgeShowResult");
+	showRow.appendChild(showLab);
+	const showCb = document.createElement("input");
+	showCb.type = "checkbox";
+	showCb.checked = node.showResult !== false;
+	showCb.addEventListener("change", () => { PSUpdateNode(sc.id, node.id, { showResult: showCb.checked }); PSUIRenderAll(); });
+	showRow.appendChild(showCb);
+	sec.appendChild(showRow);
+
+	if (node.showResult !== false) {
+		
+		const lineSel = PSUISelect(node.judgeLineType || "chat", [
+			'<option value="chat">' + PSEsc(PST("typeChat")) + "</option>",
+			'<option value="rp">' + PSEsc(PST("typeRp")) + "</option>",
+			'<option value="narr">' + PSEsc(PST("typeNarr")) + "</option>",
+			'<option value="action">' + PSEsc(PST("typeAction")) + "</option>",
+		].join(""), (v) => { PSUpdateNode(sc.id, node.id, { judgeLineType: v }); PSUIRenderAll(); });
+		sec.appendChild(PSUIEditorRow(PST("judgeLineType"), lineSel));
+
+		const ta = document.createElement("textarea");
+		ta.rows = 3;
+		ta.value = node.text;
+		PSStyle(ta, { width: "100%", boxSizing: "border-box", padding: "8px 10px", fontSize: "13px", borderRadius: "6px", background: "#10141f", color: PS_TEXT, border: "1px solid " + PS_BORDER, fontFamily: "sans-serif", resize: "vertical", marginBottom: "8px" });
+		const applyInput = () => {
+			PSUpdateNode(sc.id, node.id, { text: ta.value });
+			const card = PSUI.flowCards.find((c) => c.id === node.id);
+			if (card && card.previewEl) card.previewEl.textContent = PSUIJudgePreview(node) + (node.showResult !== false ? " · " + PSUINodePreview(ta.value) : "");
+		};
+		ta.addEventListener("input", applyInput);
+		sec.appendChild(ta);
+		PSUI.textareaEl = ta;
+		const trow = PSEl("div", { display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" });
+		const ins = (token) => {
+			const pos = (typeof ta.selectionStart === "number") ? ta.selectionStart : ta.value.length;
+			const end = (typeof ta.selectionEnd === "number") ? ta.selectionEnd : pos;
+			ta.value = ta.value.slice(0, pos) + token + ta.value.slice(end);
+			applyInput();
+			try { ta.focus(); } catch (e) {   }
+		};
+		trow.appendChild(PSSmallBtn(PST("insertNick"), () => ins(PS_NICK_TOKEN)));
+		trow.appendChild(PSSmallBtn(PST("insertTarget"), () => ins(PS_TARGET_TOKEN)));
+		trow.appendChild(PSSmallBtn(PST("insertTime"), () => { ins(PS_TIME_TOKEN); PSUIRenderAll(); }));
+		trow.appendChild(PSSmallBtn(PST("insertRoll"), () => { ins(PS_ROLL_TOKEN); PSUIRenderAll(); }));
+		sec.appendChild(trow);
+	}
+
+	
+	PSUIConnectEditorRow(sec, sc, node, "yes");
+	PSUIConnectEditorRow(sec, sc, node, "no");
+	box.appendChild(sec);
+}
 
 function PSUIRenderStatus() {
 	if (!PSUI.statusEl) return;
@@ -4251,6 +4932,81 @@ function PSUIExportScript(id) {
 }
 
  
+
+function PSUIConnectWinBuild() {
+	if (PSUI.connectWin || typeof document === "undefined" || !document.body) return;
+	const win = document.createElement("div");
+	win.id = "ps-connectwin";
+	PSStyle(win, {
+		position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
+		width: "360px", maxHeight: "70vh", zIndex: "2147483560", background: PS_BG,
+		border: "2px solid #ffffff", borderRadius: "10px",
+		boxShadow: "0 8px 40px rgba(0,0,0,.7)", display: "none",
+		color: PS_TEXT, fontFamily: "sans-serif", fontSize: "14px", overflow: "hidden",
+		display2: "none",
+	});
+	const title = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", background: "#141826", borderBottom: "1px solid " + PS_BORDER });
+	title.appendChild(PSEl("span", { color: "#f0b3ff", fontSize: "16px" }, "↳"));
+	PSUI.connectTitleEl = PSEl("span", { fontWeight: "700", fontSize: "14px", flex: "1" });
+	title.appendChild(PSUI.connectTitleEl);
+	const closeBtn = PSSmallBtn("✕", PSUIConnectWinClose, { title: PST("closeTitle") });
+	title.appendChild(closeBtn);
+	win.appendChild(title);
+	PSUI.connectListEl = PSEl("div", { overflowY: "auto", maxHeight: "calc(70vh - 44px)", padding: "8px" });
+	win.appendChild(PSUI.connectListEl);
+	document.body.appendChild(win);
+	PSUI.connectWin = win;
+}
+
+function PSUIConnectWinOpen(scriptId, nodeId, port) {
+	PSUIConnectWinBuild();
+	if (!PSUI.connectWin) return;
+	const sc = PSFindScript(scriptId);
+	const node = sc ? sc.nodes.find((n) => n.id === nodeId) : null;
+	if (!sc || !node) return;
+	PSUI.connectScriptId = scriptId;
+	PSUI.connectNodeId = nodeId;
+	PSUI.connectPort = port;
+	PSUI.connectWin.style.display = "block";
+	PSUIConnectWinRender();
+}
+
+function PSUIConnectWinClose() {
+	if (PSUI.connectWin) PSUI.connectWin.style.display = "none";
+}
+
+function PSUIConnectWinRender() {
+	const box = PSUI.connectListEl;
+	if (!box) return;
+	box.innerHTML = "";
+	const sc = PSFindScript(PSUI.connectScriptId);
+	if (!sc) return;
+	const port = PSUI.connectPort;
+	if (PSUI.connectTitleEl) PSUI.connectTitleEl.textContent = PST("connectWinTitle", port === "yes" ? PST("connectYes") : (port === "no" ? PST("connectNo") : PST("connectNext")));
+	const others = sc.nodes.filter((n) => n.id !== PSUI.connectNodeId);
+	if (!others.length) {
+		box.appendChild(PSEl("div", { color: PS_TEXT_DIM, padding: "10px", textAlign: "center" }, PSEsc(PST("connectNone"))));
+		return;
+	}
+	others.forEach((n) => {
+		const row = PSEl("div", {
+			display: "flex", alignItems: "center", gap: "8px", padding: "8px", marginBottom: "6px",
+			borderRadius: "8px", background: "#20263a", border: "1px solid " + PSUINodeColor(n.type), cursor: "pointer",
+		});
+		row.appendChild(PSEl("span", { width: "18px", fontSize: "14px", color: PSUINodeColor(n.type) }, n.type === "judge" ? "🎲" : "▶"));
+		const mid = PSEl("div", { flex: "1", minWidth: "0" });
+		mid.appendChild(PSEl("div", { fontSize: "11px", color: PSUINodeColor(n.type), fontWeight: "700" }, PSEsc(PSUITypeLabel(n.type))));
+		const pv = n.type === "judge" ? PSUIJudgePreview(n) : PSUINodePreview(n.text);
+		mid.appendChild(PSEl("div", { fontSize: "12px", color: PS_TEXT, whiteSpace: "pre-wrap", overflow: "hidden", maxHeight: "30px", wordBreak: "break-word" }, PSEsc(pv)));
+		row.appendChild(mid);
+		row.addEventListener("click", () => {
+			const r = PSNodeConnect(PSUI.connectScriptId, PSUI.connectNodeId, PSUI.connectPort, n.id);
+			if (r.ok) { PSUIConnectWinClose(); PSUIRenderAll(); }
+			
+		});
+		box.appendChild(row);
+	});
+}
 
 function PSUIRenderAll() {
 	if (!PSUI.el) PSUIRoot();
@@ -4424,6 +5180,8 @@ if (typeof module !== "undefined" && module.exports) {
 		PSSendEmoteDirect, PSEmoteBlocked, PSChatReplyId,
 		PS_NICK_TOKEN, PSCharDisplayName, PSCharObjectOf, PSTriggerName, PSApplyTokens,
 		PS_TARGET_TOKEN, PSCharIsSelf, PSTargetInRoom,
+		PS_TIME_TOKEN, PSTimeHMToMin, PSTimeRuleMinutes, PSTimeRuleMatch, PSTimeRuleText, PSNormalizeTimeRules, PSNormalizeTimeTriggerRules, PSTimeTriggerScan,
+		PS_ROLL_TOKEN, PSJudgeRoll, PSNodeEdges, PSNodeConnectionWouldCycle, PSNodeConnect, PSNodeDisconnect, PSValidDiceExpr,
 		PS_ACT_ALIASES,
 		PSFire, PSRun, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
 		PSInstallHooks, PSInputClear, PSHookWhen,
@@ -4434,7 +5192,8 @@ if (typeof module !== "undefined" && module.exports) {
 		PSPreviewDrawChar, PSPreviewDrawZones,
 		PSUIOutfitWinOpen, PSUIOutfitWinClose, PSUIOutfitToggle, PSUIOutfitAll, PSUIOutfitNone, PSUIOutfitWinRender,
 		PSUI, PSUIRenderAll, PSUIRenderStatus, PSUIListBuild, PSUIFlowBuild, PSUIEditorBuild,
-		PSUIDotBuild, PSToast, PSUINodePreview, PSUIWinClamp, PSUIExport, PSUIExportScript,
+		PSUIDotBuild, PSToast, PSUINodePreview, PSUIWinClamp, PSUIExport, PSUIExportScript, PSUITimeRuleSection,
+		PSUIJudgePreview, PSUIConnectWinOpen, PSUIConnectWinClose,
 		PlayScriptOpen, PlayScriptClose, PlayScriptToggle,
 		PSVersion: () => PS_VERSION, PSLastOutfitBlocked: () => PSLastOutfitBlocked.slice(), PSLastOutfitCleared: () => PSLastOutfitCleared.slice(),
 		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
