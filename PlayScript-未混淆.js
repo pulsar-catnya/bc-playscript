@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.7.0";
+const PS_VERSION = "1.8.0";
  
 let PSLastOutfitBlocked = [];
  
@@ -33,6 +33,7 @@ const PS_BIO_END = "━━━━━━【BCPS·PlayScript 数据结束】━━�
 const PS_MAX_DELAY = 3600;  
 const PS_MAX_KEYWORD = 64;
 const PS_QUEUE_CAP = 8;
+const PS_MAX_INTERACT_ACTIONS = 200;   
 const PS_MIN_WIN_W = 720, PS_MIN_WIN_H = 480;
 
  
@@ -208,6 +209,10 @@ const PSStore = {
 				sc.playerTarget = sc.playerTargets[0] || 0;
 				sc.timeTrigger = !!sc.timeTrigger;
 				sc.timeRules = PSNormalizeTimeTriggerRules(sc.timeRules);
+				sc.orgasmTrigger = !!sc.orgasmTrigger;         
+				sc.orgasmDenyTrigger = !!sc.orgasmDenyTrigger; 
+				sc.interactTrigger = !!sc.interactTrigger;    
+				sc.interactActions = PSInteractNormalizeActions(sc.interactActions);
 				sc.cloudBio = !!sc.cloudBio;   
 				sc.nodes = Array.isArray(sc.nodes)
 					? sc.nodes.filter((n) => n && typeof n.id === "string").map((n) => {
@@ -728,6 +733,10 @@ function PSMakeDemoScript() {
 		playerTargets: [],
 		timeTrigger: false,
 		timeRules: [],
+		orgasmTrigger: false,
+		orgasmDenyTrigger: false,
+		interactTrigger: false,
+		interactActions: [],
 		cloudBio: false,
 		nodes: [
 			{ id: "demo1n1", type: "rp", text: "从怀里掏出一个红苹果，在手里抛了抛", delay: 0.5, enabled: true },
@@ -768,6 +777,10 @@ function PSAddScript(name, keyword) {
 		playerTargets: [],
 		timeTrigger: false,
 		timeRules: [],
+		orgasmTrigger: false,
+		orgasmDenyTrigger: false,
+		interactTrigger: false,
+		interactActions: [],
 		cloudBio: false,
 		nodes: [],
 	};
@@ -835,6 +848,10 @@ function PSUpdateScript(id, patch) {
 	}
 	if ("timeTrigger" in patch) sc.timeTrigger = !!patch.timeTrigger;
 	if ("timeRules" in patch) sc.timeRules = PSNormalizeTimeTriggerRules(patch.timeRules);
+	if ("orgasmTrigger" in patch) sc.orgasmTrigger = !!patch.orgasmTrigger;
+	if ("orgasmDenyTrigger" in patch) sc.orgasmDenyTrigger = !!patch.orgasmDenyTrigger;
+	if ("interactTrigger" in patch) sc.interactTrigger = !!patch.interactTrigger;
+	if ("interactActions" in patch) sc.interactActions = PSInteractNormalizeActions(patch.interactActions);
 	if ("cloudBio" in patch) sc.cloudBio = !!patch.cloudBio;
 	PSStore.requestSave();
 	return true;
@@ -2241,6 +2258,106 @@ function PSActGroupLabel(name) {
 }
 
  
+
+ 
+function PSInteractNormalizeActions(v) {
+	const out = [];
+	if (!Array.isArray(v)) return out;
+	for (const it of v) {
+		if (!it || typeof it !== "object") continue;
+		const g = String(it.g ?? it.group ?? "").trim();
+		const a = String(it.a ?? it.action ?? "").trim();
+		if (!g || !a) continue;
+		if (out.length >= PS_MAX_INTERACT_ACTIONS) break;
+		if (!out.some((x) => x.g === g && x.a === a)) out.push({ g, a });
+	}
+	return out;
+}
+
+ 
+function PSInteractGroups(sc) {
+	if (!sc || !Array.isArray(sc.interactActions)) return [];
+	const seen = new Set();
+	const out = [];
+	for (const x of sc.interactActions) {
+		if (x && typeof x.g === "string" && !seen.has(x.g)) { seen.add(x.g); out.push(x.g); }
+	}
+	return out;
+}
+
+function PSInteractGroupCount(sc, group) {
+	if (!sc || !Array.isArray(sc.interactActions)) return 0;
+	return sc.interactActions.filter((x) => x && x.g === group).length;
+}
+
+function PSInteractHas(sc, group, action) {
+	if (!sc || !Array.isArray(sc.interactActions)) return false;
+	return sc.interactActions.some((x) => x && x.g === group && x.a === action);
+}
+
+ 
+function PSInteractActivityNames(baseGroup) {
+	const family = (typeof Player !== "undefined" && Player && typeof Player.AssetFamily === "string" && Player.AssetFamily) ? Player.AssetFamily : "Female3DCG";
+	const seen = new Set();
+	const out = [];
+	const push = (name) => { if (name && typeof name === "string" && !seen.has(name)) { seen.add(name); out.push(name); } };
+
+	
+	const actual = [];
+	if (typeof AssetGroup !== "undefined" && Array.isArray(AssetGroup)) {
+		for (const g of AssetGroup) {
+			try { if (!g || typeof g.IsItem !== "function" || !g.IsItem()) continue; } catch (e) { continue; }
+			if (g.Name && PSActBaseGroup(g.Name) === baseGroup) actual.push(g.Name);
+		}
+	}
+	if (!actual.length) actual.push(baseGroup);
+	for (const gname of actual) {
+		try {
+			if (typeof AssetActivitiesForGroup === "function") {
+				const acts = AssetActivitiesForGroup(family, gname, "other") || [];
+				for (const a of acts) push(a && a.Name);
+			}
+		} catch (e) {   }
+	}
+
+	
+	try {
+		if (typeof ActivityAllowedForGroup === "function" && typeof Player !== "undefined" && Player) {
+			const allowed = ActivityAllowedForGroup(Player, baseGroup) || [];
+			for (const e of allowed) {
+				if (!e || e.__psCustom) continue;
+				if (e.Activity) push(e.Activity.Name);
+				else if (typeof e.Name === "string") push(e.Name);
+			}
+		}
+	} catch (e) {   }
+
+	return out;
+}
+
+ 
+function PSInteractActivityLabel(baseGroup, activityName) {
+	try {
+		const family = (typeof Player !== "undefined" && Player && typeof Player.AssetFamily === "string" && Player.AssetFamily) ? Player.AssetFamily : "Female3DCG";
+		let group = null;
+		try { if (typeof ActivityGetGroupOrMirror === "function") group = ActivityGetGroupOrMirror(family, baseGroup); } catch (e) {}
+		if (!group) { try { if (typeof AssetGroupGet === "function") group = AssetGroupGet(family, baseGroup); } catch (e) {} }
+		const gname = (group && group.Name) ? group.Name : baseGroup;
+		let realGroup = gname;
+		const map = { "ItemVulva": "ItemPenis", "ItemVulvaPiercings": "ItemGlans" };
+		try {
+			if (typeof Player !== "undefined" && Player && typeof Player.HasPenis === "function" && Player.HasPenis() && map[gname]) realGroup = map[gname];
+		} catch (e) {}
+		const tag = "Label-ChatOther-" + realGroup + "-" + activityName;
+		if (typeof ActivityDictionaryText === "function") {
+			const txt = ActivityDictionaryText(tag);
+			if (txt && typeof txt === "string" && txt.length && txt !== tag) return txt;
+		}
+		return activityName;
+	} catch (e) { return activityName; }
+}
+
+ 
 function PSActEntriesFor(C) {
 	const out = [];
 	if (!C || !C.FocusGroup || !PSStore.state) return out;
@@ -2547,6 +2664,60 @@ function PSInstallHooks(mod) {
 		})();
 		return res;
 	});
+
+	
+	
+	
+	
+	
+	
+	PSHookWhen(mod, "ActivityOrgasmStart", 10, (args, next) => {
+		const res = next(args);
+		safe(() => {
+			const C = args[0];
+			if (!C || typeof C.IsPlayer !== "function" || !C.IsPlayer() || !PSStore.state) return;
+			if (!PSCanSend()) return;   
+			const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
+			const ruined = (typeof ActivityOrgasmRuined !== "undefined" && ActivityOrgasmRuined);
+			for (const sc of PSStore.state.scripts) {
+				if (sc.enabled === false) continue;
+				if (!ruined && sc.orgasmTrigger) {
+					PSLog("高潮触发：", sc.name);
+					PSFire(sc.id, { senderNum: me });
+				} else if (ruined && sc.orgasmDenyTrigger) {
+					PSLog("拒绝高潮触发（毁坏高潮）：", sc.name);
+					PSFire(sc.id, { senderNum: me });
+				}
+			}
+		})();
+		return res;
+	});
+
+	
+	
+	
+	PSHookWhen(mod, "ActivityEffect", 10, (args, next) => {
+		const res = next(args);
+		safe(() => {
+			const S = args[0], C = args[1], A = args[2], Z = args[3];
+			if (!PSStore.state) return;
+			if (!C || typeof C.IsPlayer !== "function" || !C.IsPlayer()) return;   
+			if (!S || typeof S.IsPlayer !== "function" || S.IsPlayer()) return;    
+			if (typeof S.IsNpc === "function" && S.IsNpc()) return;                
+			if (!PSCanSend()) return;
+			const actName = (A && typeof A === "object") ? (A.Name || "") : String(A || "");
+			const group = PSActBaseGroup(String(Z || ""));
+			if (!actName || !group) return;
+			const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
+			for (const sc of PSStore.state.scripts) {
+				if (sc.enabled === false || !sc.interactTrigger) continue;
+				if (!PSInteractHas(sc, group, actName)) continue;
+				PSLog("互动触发：", sc.name, "#" + (S.MemberNumber != null ? S.MemberNumber : "?"), actName, "@" + group);
+				PSFire(sc.id, { senderNum: me, targetNum: S.MemberNumber });   
+			}
+		})();
+		return res;
+	});
 }
 
 function PSMain() {
@@ -2662,6 +2833,19 @@ const PSText = {
 		timeTriggerHint: "设置一个或多个时间段+时区，当前时间命中即自动触发（只在聊天室内检查，每 15 秒一次）",
 		playerTrigger: "见到玩家触发",
 		playerTargetId: "玩家数字ID（可多个）",
+		orgasmTrigger: "高潮触发",
+		orgasmDenyTrigger: "拒绝高潮触发",
+		orgasmHint: "自己高潮完成时触发「高潮触发」；被拒绝高潮（=毁坏高潮，如高潮锁「拒绝」模式）时触发「拒绝高潮触发」——准备阶段的边缘寸止（edge）不算",
+		interactTrigger: "别人对我互动触发",
+		interactHint: "别的玩家对你做的互动动作命中时自动触发：先选身体部位，再选该部位上哪些动作会触发（绿格=该部位已有选中动作）",
+		interactPick: "选择部位与动作…",
+		interactGroupsN: "已选 {0} 个部位 / {1} 个动作",
+		interactWinTitle: "选择互动触发部位",
+		interactActWinTitle: "选择 {0} 的互动动作",
+		interactActHint: "点动作切换选中（绿底=会触发），可多选",
+		interactEmpty: "这个部位没有可选互动动作",
+		interactBack: "返回部位",
+		interactCurrent: "已选 {0} 个动作",
 		dupScript: "复制剧本",
 		delScript: "删除剧本",
 		delScriptConfirm: "确认删除",
@@ -2748,10 +2932,10 @@ const PSText = {
 		nodeDelay: "延时（秒，0=立刻）",
 		nodeText: "台词文本",
 		nodeEnabled: "启用该句",
-		insertNick: "插入昵称占位符",
-		insertTarget: "插入目标占位符",
+		insertNick: "插入我的昵称的占位符",
+		insertTarget: "插入对方的昵称的占位符",
 		insertTime: "插入时间判定",
-		nickHint: "演出时 <nick> 换成触发者昵称、<target> 换成目标昵称（没有目标时=触发者）",
+		nickHint: "演出时 <nick> 换成我的昵称、<target> 换成对方的昵称（没有对方时=我自己）",
 		timeRuleSection: "时间判定台词（<time>）",
 		timeRuleHint: "从上到下匹配，命中第一条即替换 <time>；没有命中 → 替换为空。时间用 24 小时制；时区可填 local、UTC+8、UTC-5:30，或 Asia/Shanghai、America/New_York 等；支持跨午夜（如 22:00~02:00）",
 		timeRuleFrom: "开始时间",
@@ -2881,6 +3065,19 @@ const PSText = {
 		timeTriggerHint: "Add one or more time ranges + timezones; the script fires when the current time matches (checked every 15s, only while in a chat room)",
 		playerTrigger: "Trigger on seeing player",
 		playerTargetId: "Player IDs (multiple ok)",
+		orgasmTrigger: "Trigger on orgasm",
+		orgasmDenyTrigger: "Trigger on denied orgasm",
+		orgasmHint: "Fires when you orgasm; the deny trigger fires only on a ruined orgasm (e.g. orgasm lock deny mode). Pre-orgasm edging does not count",
+		interactTrigger: "Trigger on others' interactions",
+		interactHint: "Fires when another player performs a selected activity on you: pick body parts first, then pick which activities trigger (green cell = part has selections)",
+		interactPick: "Pick parts & actions…",
+		interactGroupsN: "{0} parts / {1} actions selected",
+		interactWinTitle: "Pick interaction trigger parts",
+		interactActWinTitle: "Pick activities for {0}",
+		interactActHint: "Click an activity to toggle it (green = will trigger); multi-select",
+		interactEmpty: "No selectable activities for this part",
+		interactBack: "Back to parts",
+		interactCurrent: "{0} actions selected",
 		dupScript: "Duplicate",
 		delScript: "Delete script",
 		delScriptConfirm: "Confirm delete",
@@ -2967,10 +3164,10 @@ const PSText = {
 		nodeDelay: "Delay (sec, 0=immediate)",
 		nodeText: "Line text",
 		nodeEnabled: "Enable this line",
-		insertNick: "Insert name tag",
-		insertTarget: "Insert target tag",
+		insertNick: "Insert my nickname tag",
+		insertTarget: "Insert their nickname tag",
 		insertTime: "Insert time tag",
-		nickHint: "<nick> = triggerer's nickname, <target> = target's nickname (fallback = triggerer)",
+		nickHint: "<nick> = my nickname, <target> = the other player's nickname (fallback = me)",
 		timeRuleSection: "Time-based line (<time>)",
 		timeRuleHint: "Matched top to bottom: the first matching range replaces <time>; no match → empty. 24-hour times. Timezone can be local, UTC+8, UTC-5:30, or Asia/Shanghai, America/New_York, etc. Cross-midnight ranges (e.g. 22:00~02:00) are supported",
 		timeRuleFrom: "From",
@@ -3068,6 +3265,10 @@ const PSUI = {
 	outfitWin: null, outfitOpen: false, outfitScriptId: null, outfitNodeId: null,
 	outfitCodeGroups: [], outfitPickable: [], outfitBundle: [], outfitSel: [], outfitHover: null,
 	outfitTitleEl: null, outfitChipEl: null, outfitCanvas: null,
+	interactWin: null, interactOpen: false, interactScriptId: null, interactCanvas: null, interactHover: null,
+	interactTitleEl: null, interactChipEl: null,
+	interactActWin: null, interactActOpen: false, interactActGroup: null, interactActList: [],
+	interactActTitleEl: null, interactActChipEl: null, interactActListEl: null,
 	connectWin: null, connectTitleEl: null, connectListEl: null, connectScriptId: null, connectNodeId: null, connectPort: "next",
 	dot: null,
 	toastEl: null, toastTimer: null,
@@ -3446,7 +3647,9 @@ function PSUIRoot() {
 		PSUI.keyBound = true;
 		document.addEventListener("keydown", (e) => {
 			if (e.key === "Escape") {
-				if (PSUI.outfitOpen) PSUIOutfitWinClose();
+				if (PSUI.interactActOpen) PSInteractActClose();
+				else if (PSUI.interactOpen) PSInteractWinClose();
+				else if (PSUI.outfitOpen) PSUIOutfitWinClose();
 				else if (PSUI.actOpen) PSUIActWinClose();
 				else if (PSUI.open) PlayScriptClose();
 			}
@@ -3605,7 +3808,7 @@ function PSUIFlowBuild() {
 	if (sc.caseSensitive) chipRow.appendChild(chip("Aa", "#2a3150", "#c9d2f5"));
 	if ((Number(sc.cooldown) || 0) > 0) chipRow.appendChild(chip(PST("delayChip", Number(sc.cooldown) || 0), "#2a3150", "#c9d2f5"));
 	if (sc.actionEnabled) chipRow.appendChild(chip("▶", "#1d4d47", "#2ec4b6"));
-	if (sc.roomTrigger || sc.playerTrigger) chipRow.appendChild(chip(PST("chipOther"), "#2a3150", "#c9d2f5"));
+	if (sc.roomTrigger || sc.playerTrigger || sc.orgasmTrigger || sc.orgasmDenyTrigger || sc.interactTrigger) chipRow.appendChild(chip(PST("chipOther"), "#2a3150", "#c9d2f5"));
 	trig.appendChild(chipRow);
 	box.appendChild(trig);
 
@@ -4133,6 +4336,205 @@ function PSUIActWinRender() {
 
  
 
+function PSInteractWinScript() {
+	return PSFindScript(PSUI.interactScriptId);
+}
+
+function PSInteractBundle() {
+	try {
+		if (typeof Player !== "undefined" && Player && typeof ServerAppearanceBundle === "function") {
+			return ServerAppearanceBundle(Player) || [];
+		}
+	} catch (e) {   }
+	return [];
+}
+
+function PSInteractWinRender() {
+	if (!PSUI.interactWin || !PSUI.interactCanvas) return;
+	const sc = PSInteractWinScript();
+	if (PSUI.interactTitleEl) PSUI.interactTitleEl.textContent = PST("interactWinTitle") + " · " + (sc ? sc.name : "");
+	if (PSUI.interactChipEl) PSUI.interactChipEl.textContent = PST("interactGroupsN", PSInteractGroups(sc).length, (sc && Array.isArray(sc.interactActions)) ? sc.interactActions.length : 0);
+	PSPreviewDrawChar(PSUI.interactCanvas, PSInteractBundle());
+	const sel = new Set(PSInteractGroups(sc));
+	PSPreviewDrawZones(PSUI.interactCanvas, (name) => {
+		if (sel.has(name)) return { fill: "rgba(76,175,80,0.35)", stroke: "#66bb6a", width: 2.5 };
+		if (name === PSUI.interactHover) return { fill: "rgba(255,255,255,0.18)", stroke: "rgba(255,255,255,0.85)", width: 2 };
+		return { fill: "#80808040", stroke: "#808080", width: 1.5 };
+	}, PSActZones());
+}
+
+function PSInteractWinBuild() {
+	if (PSUI.interactWin || typeof document === "undefined" || !document.body) return;
+	const win = document.createElement("div");
+	win.id = "ps-interactwin";
+	PSStyle(win, {
+		position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
+		width: "380px", zIndex: "2147483570", background: PS_BG,
+		border: "2px solid #ffffff", borderRadius: "10px",
+		boxShadow: "0 8px 40px rgba(0,0,0,.7)", display: "none",
+		color: PS_TEXT, fontFamily: "sans-serif", fontSize: "14px", overflow: "hidden",
+	});
+	const title = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", background: "#141826", borderBottom: "1px solid " + PS_BORDER, userSelect: "none" });
+	title.appendChild(PSEl("span", { color: "#9fd8a0", fontSize: "16px" }, "▶"));
+	PSUI.interactTitleEl = PSEl("span", { fontWeight: "700", fontSize: "14px", flex: "1" });
+	title.appendChild(PSUI.interactTitleEl);
+	const closeBtn = PSSmallBtn("✕", PSInteractWinClose, { title: PST("closeTitle") });
+	title.appendChild(closeBtn);
+	win.appendChild(title);
+
+	const hint = PSEl("div", { padding: "6px 12px", fontSize: "12px", color: PS_TEXT_DIM, borderBottom: "1px solid " + PS_BORDER });
+	hint.textContent = PST("interactHint");
+	win.appendChild(hint);
+
+	const canvas = document.createElement("canvas");
+	canvas.width = 300; canvas.height = 500;
+	PSStyle(canvas, { display: "block", position: "relative", width: "300px", height: "500px", margin: "8px auto 0", cursor: "crosshair" });
+	canvas.addEventListener("click", (ev) => {
+		try {
+			const rect = canvas.getBoundingClientRect();
+			const x = (ev.clientX - rect.left) * (canvas.width / Math.max(1, rect.width));
+			const y = (ev.clientY - rect.top) * (canvas.height / Math.max(1, rect.height));
+			const hit = PSActZoneHitTest(x, y, canvas.width, canvas.height);
+			if (hit) PSInteractWinPick(hit);
+		} catch (e) { PSErr("互动部位选择点击失败", e); }
+	});
+	canvas.addEventListener("mousemove", (ev) => {
+		try {
+			const rect = canvas.getBoundingClientRect();
+			const x = (ev.clientX - rect.left) * (canvas.width / Math.max(1, rect.width));
+			const y = (ev.clientY - rect.top) * (canvas.height / Math.max(1, rect.height));
+			const hit = PSActZoneHitTest(x, y, canvas.width, canvas.height);
+			if (hit !== PSUI.interactHover) { PSUI.interactHover = hit; PSInteractWinRender(); }
+		} catch (e) {   }
+	});
+	canvas.addEventListener("mouseleave", () => {
+		if (PSUI.interactHover !== null) { PSUI.interactHover = null; PSInteractWinRender(); }
+	});
+	win.appendChild(canvas);
+
+	const foot = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", padding: "10px 12px" });
+	PSUI.interactChipEl = PSEl("span", { flex: "1", textAlign: "center", padding: "8px 10px", borderRadius: "6px", background: "#10141f", border: "1px solid " + PS_BORDER, color: "#9fd8a0", fontSize: "13px" });
+	foot.appendChild(PSUI.interactChipEl);
+	foot.appendChild(PSBigBtn(PST("actDone"), PSInteractWinClose, { bg: "#2c7a70" }));
+	win.appendChild(foot);
+
+	document.body.appendChild(win);
+	PSUI.interactWin = win;
+	PSUI.interactCanvas = canvas;
+}
+
+function PSInteractWinOpen() {
+	const sc = PSFindScript(PSUI.selScriptId);
+	if (!sc) { PSToast(PST("toastNoSelScript")); return; }
+	PSUI.interactScriptId = sc.id;
+	PSUI.interactHover = null;
+	PSInteractWinBuild();
+	if (!PSUI.interactWin) return;
+	PSUI.interactOpen = true;
+	PSUI.interactWin.style.display = "block";
+	PSInteractWinRender();
+}
+
+function PSInteractWinClose() {
+	PSUI.interactOpen = false;
+	PSUI.interactHover = null;
+	if (PSUI.interactWin) PSUI.interactWin.style.display = "none";
+}
+
+function PSInteractWinPick(group) {
+	PSUI.interactActGroup = group;
+	PSUI.interactActList = PSInteractActivityNames(group);
+	PSInteractActBuild();
+	if (!PSUI.interactActWin) return;
+	PSUI.interactActOpen = true;
+	PSUI.interactActWin.style.display = "flex";
+	PSInteractActRender();
+}
+
+function PSInteractActBuild() {
+	if (PSUI.interactActWin || typeof document === "undefined" || !document.body) return;
+	const win = document.createElement("div");
+	win.id = "ps-interactactwin";
+	PSStyle(win, {
+		position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
+		width: "420px", maxHeight: "80vh", zIndex: "2147483580", background: PS_BG,
+		border: "2px solid #ffffff", borderRadius: "10px",
+		boxShadow: "0 8px 40px rgba(0,0,0,.7)", display: "none", flexDirection: "column",
+		color: PS_TEXT, fontFamily: "sans-serif", fontSize: "14px", overflow: "hidden",
+	});
+	const title = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", background: "#141826", borderBottom: "1px solid " + PS_BORDER, userSelect: "none" });
+	title.appendChild(PSEl("span", { color: "#9fd8a0", fontSize: "16px" }, "▶"));
+	PSUI.interactActTitleEl = PSEl("span", { fontWeight: "700", fontSize: "14px", flex: "1" });
+	title.appendChild(PSUI.interactActTitleEl);
+	const closeBtn = PSSmallBtn("✕", PSInteractActClose, { title: PST("closeTitle") });
+	title.appendChild(closeBtn);
+	win.appendChild(title);
+
+	const hint = PSEl("div", { padding: "6px 12px", fontSize: "12px", color: PS_TEXT_DIM, borderBottom: "1px solid " + PS_BORDER });
+	hint.textContent = PST("interactActHint");
+	win.appendChild(hint);
+
+	const listEl = PSEl("div", { overflowY: "auto", padding: "8px 12px", flex: "1", minHeight: "0" });
+	win.appendChild(listEl);
+	PSUI.interactActListEl = listEl;
+
+	const foot = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", padding: "10px 12px", borderTop: "1px solid " + PS_BORDER });
+	foot.appendChild(PSBigBtn(PST("interactBack"), PSInteractActClose));
+	PSUI.interactActChipEl = PSEl("span", { flex: "1", textAlign: "center", padding: "8px 10px", borderRadius: "6px", background: "#10141f", border: "1px solid " + PS_BORDER, color: "#9fd8a0", fontSize: "13px" });
+	foot.appendChild(PSUI.interactActChipEl);
+	foot.appendChild(PSBigBtn(PST("actDone"), PSInteractActClose, { bg: "#2c7a70" }));
+	win.appendChild(foot);
+
+	document.body.appendChild(win);
+	PSUI.interactActWin = win;
+}
+
+function PSInteractActClose() {
+	PSUI.interactActOpen = false;
+	if (PSUI.interactActWin) PSUI.interactActWin.style.display = "none";
+	PSInteractWinRender();
+}
+
+function PSInteractToggleAction(group, action) {
+	const sc = PSInteractWinScript();
+	if (!sc) return;
+	const arr = Array.isArray(sc.interactActions) ? sc.interactActions.slice() : [];
+	const i = arr.findIndex((x) => x.g === group && x.a === action);
+	if (i >= 0) arr.splice(i, 1);
+	else arr.push({ g: group, a: action });
+	PSUpdateScript(sc.id, { interactActions: arr });
+	PSInteractActRender();
+	PSInteractWinRender();
+	PSUIRenderAll();
+}
+
+function PSInteractActRender() {
+	if (!PSUI.interactActWin) return;
+	const sc = PSInteractWinScript();
+	const group = PSUI.interactActGroup;
+	if (PSUI.interactActTitleEl) PSUI.interactActTitleEl.textContent = PST("interactActWinTitle", PSActGroupLabel(group));
+	if (PSUI.interactActChipEl) PSUI.interactActChipEl.textContent = PST("interactCurrent", PSInteractGroupCount(sc, group));
+	const listEl = PSUI.interactActListEl;
+	if (!listEl) return;
+	listEl.innerHTML = "";
+	if (!PSUI.interactActList || !PSUI.interactActList.length) {
+		listEl.appendChild(PSEl("div", { color: PS_TEXT_DIM, padding: "14px", textAlign: "center" }, PSEsc(PST("interactEmpty"))));
+		return;
+	}
+	for (const a of PSUI.interactActList) {
+		const on = PSInteractHas(sc, group, a);
+		const b = PSEl("button", {
+			display: "block", width: "100%", textAlign: "left", padding: "8px 10px", margin: "4px 0",
+			background: on ? "#2e7d32" : "#2c3350", color: on ? "#d7ffd9" : "#ffffff",
+			border: "1px solid " + (on ? "#66bb6a" : PS_BORDER), borderRadius: "6px", cursor: "pointer", fontSize: "13px",
+		}, PSEsc(PSInteractActivityLabel(group, a)));
+		b.addEventListener("click", () => PSInteractToggleAction(group, a));
+		listEl.appendChild(b);
+	}
+}
+
+ 
+
 function PSUIOutfitNode() {
 	const sc = PSFindScript(PSUI.outfitScriptId);
 	return sc ? (sc.nodes.find((n) => n.id === PSUI.outfitNodeId) || null) : null;
@@ -4574,6 +4976,58 @@ function PSUITriggerSection(box, sc) {
 		tsec.appendChild(addT);
 		otherSec.appendChild(tsec);
 	}
+
+	
+	const orgHint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "6px" });
+	orgHint.textContent = PST("orgasmHint");
+	otherSec.appendChild(orgHint);
+	const orgRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const orgLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	orgLab.textContent = PST("orgasmTrigger");
+	orgRow.appendChild(orgLab);
+	const orgCb = document.createElement("input");
+	orgCb.type = "checkbox";
+	orgCb.checked = !!sc.orgasmTrigger;
+	orgCb.addEventListener("change", () => { PSUpdateScript(sc.id, { orgasmTrigger: orgCb.checked }); PSUIRenderAll(); });
+	orgRow.appendChild(orgCb);
+	otherSec.appendChild(orgRow);
+	const orgDenyRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const orgDenyLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	orgDenyLab.textContent = PST("orgasmDenyTrigger");
+	orgDenyRow.appendChild(orgDenyLab);
+	const orgDenyCb = document.createElement("input");
+	orgDenyCb.type = "checkbox";
+	orgDenyCb.checked = !!sc.orgasmDenyTrigger;
+	orgDenyCb.addEventListener("change", () => { PSUpdateScript(sc.id, { orgasmDenyTrigger: orgDenyCb.checked }); PSUIRenderAll(); });
+	orgDenyRow.appendChild(orgDenyCb);
+	otherSec.appendChild(orgDenyRow);
+
+	
+	const interRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const interLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	interLab.textContent = PST("interactTrigger");
+	interRow.appendChild(interLab);
+	const interCb = document.createElement("input");
+	interCb.type = "checkbox";
+	interCb.checked = !!sc.interactTrigger;
+	interCb.addEventListener("change", () => { PSUpdateScript(sc.id, { interactTrigger: interCb.checked }); PSUIRenderAll(); });
+	interRow.appendChild(interCb);
+	otherSec.appendChild(interRow);
+	if (sc.interactTrigger) {
+		const interHint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "6px", paddingLeft: "18px" });
+		interHint.textContent = PST("interactHint");
+		otherSec.appendChild(interHint);
+		const interPickRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", paddingLeft: "18px" });
+		const interPickBtn = PSSmallBtn("▶ " + PST("interactPick"), PSInteractWinOpen);
+		interPickBtn.style.flex = "1";
+		interPickRow.appendChild(interPickBtn);
+		interPickRow.appendChild(PSEl("span", {
+			padding: "6px 10px", borderRadius: "6px", background: "#10141f",
+			border: "1px solid " + PS_BORDER, fontSize: "13px", color: "#9fd8a0",
+		}, PSEsc(PST("interactGroupsN", PSInteractGroups(sc).length, (Array.isArray(sc.interactActions) ? sc.interactActions.length : 0)))));
+		otherSec.appendChild(interPickRow);
+	}
+
 	sec1.appendChild(otherSec);
 	box.appendChild(sec1);
 }
@@ -5427,6 +5881,8 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_ACTION_GROUPS, PSActGroupLabel, PSActEntriesFor, PSInstallActivityButtonHook,
 		PSActZones, PSActCanvasMap, PSActZoneHitTest, PSUIActPreviewDraw, PSUIActWinOpen, PSUIActWinClose, PSUIActWinSelect,
 		PSActBaseGroup,
+		PSInteractNormalizeActions, PSInteractGroups, PSInteractGroupCount, PSInteractHas, PSInteractActivityNames, PSInteractActivityLabel,
+		PSInteractWinOpen, PSInteractWinClose, PSInteractWinRender, PSInteractActRender,
 		PSActZonesAll, PSActZoneHitTestAll,
 		PSPreviewDrawChar, PSPreviewDrawZones,
 		PSUIOutfitWinOpen, PSUIOutfitWinClose, PSUIOutfitToggle, PSUIOutfitAll, PSUIOutfitNone, PSUIOutfitWinRender,
