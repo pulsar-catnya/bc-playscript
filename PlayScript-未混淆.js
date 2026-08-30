@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.5.10";
+const PS_VERSION = "1.6.0";
  
 let PSLastOutfitBlocked = [];
  
@@ -3013,6 +3013,7 @@ const PSUI = {
 	importEl: null, importTextEl: null, importFileEl: null,
 	textareaEl: null,  
 	flowCards: [],     
+	flowToolbarEl: null,   
 	actWin: null, actOpen: false, actScriptId: null, actCanvas: null, actHover: null,
 	actTitleEl: null, actChipEl: null,
 	outfitWin: null, outfitOpen: false, outfitScriptId: null, outfitNodeId: null,
@@ -3340,8 +3341,13 @@ function PSUIRoot() {
 	PSUI.listEl = PSEl("div", { width: "224px", minWidth: "224px", overflowY: "auto", background: "#181c2a", borderRight: "1px solid " + PS_BORDER, padding: "8px" });
 	PSUI.flowEl = PSEl("div", { flex: "1", minWidth: "0", overflowY: "auto", overflowX: "auto", padding: "10px 14px" });
 	PSUI.editorEl = PSEl("div", { width: "340px", minWidth: "340px", overflowY: "auto", background: "#181c2a", borderLeft: "1px solid " + PS_BORDER, padding: "10px" });
+	
+	const flowCol = PSEl("div", { flex: "1", minWidth: "0", display: "flex", flexDirection: "column", minHeight: "0" });
+	PSUI.flowToolbarEl = PSEl("div", { display: "flex", gap: "8px", padding: "8px 14px", borderBottom: "1px solid " + PS_BORDER, background: "#141826", flexShrink: "0" });
+	flowCol.appendChild(PSUI.flowToolbarEl);
+	flowCol.appendChild(PSUI.flowEl);
 	body.appendChild(PSUI.listEl);
-	body.appendChild(PSUI.flowEl);
+	body.appendChild(flowCol);
 	body.appendChild(PSUI.editorEl);
 	PSUI.bodyEl = body;
 	el.appendChild(body);
@@ -3626,7 +3632,7 @@ function PSUIFlowBuild() {
 	const makeLane = (label, color) => {
 		
 		
-		const lane = PSEl("div", { flex: "0 0 auto", width: "max-content", minWidth: "240px", maxWidth: "680px", borderLeft: "2px solid " + color, paddingLeft: "6px" });
+		const lane = PSEl("div", { flex: "0 0 auto", width: "max-content", minWidth: "240px", borderLeft: "2px solid " + color, paddingLeft: "6px" });
 		lane.appendChild(PSEl("div", { fontSize: "11px", color: "#d9c2ff", fontWeight: "700", marginBottom: "2px" }, PSEsc(label)));
 		return lane;
 	};
@@ -3667,7 +3673,7 @@ function PSUIFlowBuild() {
 	sc.nodes.forEach((n) => { if (!visited.has(n.id)) renderPath(n, box); });
 
 	 
-	const addRow = PSEl("div", { display: "flex", gap: "8px", margin: "12px 0 20px" });
+	const addRow = PSEl("div", { display: "flex", gap: "8px", margin: "0" });
 	const addBtn = PSBigBtn(PST("addNode"), () => {
 		const sc2 = PSFindScript(PSUI.selScriptId);
 		if (!sc2) { PSToast(PST("toastNoSelScript")); return; }
@@ -3712,7 +3718,13 @@ function PSUIFlowBuild() {
 	}, { bg: "#5a3d7a" });
 	addJudgeBtn.style.flex = "1";
 	addRow.appendChild(addJudgeBtn);
-	box.appendChild(addRow);
+	
+	if (PSUI.flowToolbarEl) {
+		PSUI.flowToolbarEl.innerHTML = "";
+		PSUI.flowToolbarEl.appendChild(addRow);
+	} else {
+		box.appendChild(addRow);
+	}
 }
 
 function PSUINodePreview(text) {
@@ -4525,7 +4537,18 @@ function PSUINodeEditor(box, sc, node) {
 			border: "1px solid " + (active ? "#ffffff" : PS_BORDER),
 			borderRadius: "8px", cursor: "pointer",
 		}, PSEsc(PSUITypeLabel(t)));
-		b.addEventListener("click", () => { PSUpdateNode(sc.id, node.id, { type: t }); PSUIRenderAll(); });
+		b.addEventListener("click", () => {
+			if (t === "judge" && node.type !== "judge") {
+				
+				const idx = sc.nodes.indexOf(node);
+				const yesN = PSAddNode(sc.id, { type: "chat", text: PST("judgeYesPh"), delay: 0, enabled: true }, idx + 1);
+				const noN = PSAddNode(sc.id, { type: "chat", text: PST("judgeNoPh"), delay: 0, enabled: true }, idx + 2);
+				PSUpdateNode(sc.id, node.id, { type: "judge", text: PST("judgeDefaultLine"), showResult: true, yesId: yesN.id, noId: noN.id, nextId: null });
+			} else {
+				PSUpdateNode(sc.id, node.id, { type: t });
+			}
+			PSUIRenderAll();
+		});
 		typeRow.appendChild(b);
 	});
 	sec2.appendChild(typeRow);
