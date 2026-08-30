@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.5.5";
+const PS_VERSION = "1.5.6";
  
 let PSLastOutfitBlocked = [];
  
@@ -4865,8 +4865,6 @@ function PSUIJudgeEditor(box, sc, node) {
 	
 	PSUIConnectEditorRow(sec, sc, node, "yes");
 	PSUIConnectEditorRow(sec, sc, node, "no");
-	
-	PSUIConnectEditorRow(sec, sc, node, "next");
 	box.appendChild(sec);
 }
 
