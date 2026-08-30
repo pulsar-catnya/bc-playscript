@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.5.8";
+const PS_VERSION = "1.5.9";
  
 let PSLastOutfitBlocked = [];
  
@@ -3581,6 +3581,7 @@ function PSUIFlowBuild() {
 		const card = PSEl("div", {
 			display: "flex", alignItems: "flex-start", gap: "8px",
 			padding: "10px 12px", borderRadius: "10px", marginBottom: "2px",
+			maxWidth: "480px",
 			background: selected ? "#2c3452" : "#20263a",
 			border: "1px solid " + (selected ? PS_ACCENT : PSUINodeColor(n.type)),
 			cursor: "pointer",
@@ -3623,7 +3624,9 @@ function PSUIFlowBuild() {
 	};
 
 	const makeLane = (label, color) => {
-		const lane = PSEl("div", { flex: "1", minWidth: "240px", borderLeft: "2px solid " + color, paddingLeft: "6px" });
+		
+		
+		const lane = PSEl("div", { flex: "0 0 auto", width: "max-content", minWidth: "240px", maxWidth: "680px", borderLeft: "2px solid " + color, paddingLeft: "6px" });
 		lane.appendChild(PSEl("div", { fontSize: "11px", color: "#d9c2ff", fontWeight: "700", marginBottom: "2px" }, PSEsc(label)));
 		return lane;
 	};
@@ -3635,7 +3638,7 @@ function PSUIFlowBuild() {
 		lane.appendChild(makeCard(n));
 		if (n.type === "judge") {
 			
-			const cols = PSEl("div", { display: "flex", gap: "8px", alignItems: "flex-start", width: "100%" });
+			const cols = PSEl("div", { display: "flex", gap: "8px", alignItems: "flex-start", flexWrap: "nowrap" });
 			const yesLane = makeLane(PST("connectYes"), "#2c7a70");
 			const noLane = makeLane(PST("connectNo"), "#7a2c3a");
 			cols.appendChild(yesLane);
