@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.5.0";
+const PS_VERSION = "1.5.1";
  
 let PSLastOutfitBlocked = [];
  
@@ -1284,14 +1284,12 @@ function PSNormalizeTimeRules(arr) {
 		const from = PSTimeHMToMin(r.from);
 		const to = PSTimeHMToMin(r.to);
 		if (from == null || to == null) continue;
-		const text = String(r.text ?? "").trim().slice(0, 200);
-		if (!text) continue;
 		out.push({
 			id: typeof r.id === "string" ? r.id : PSUid("tr"),
 			from: String(r.from).trim(),
 			to: String(r.to).trim(),
 			tz: String(r.tz ?? "").trim().slice(0, 64),
-			text,
+			text: String(r.text ?? "").trim().slice(0, 200),
 		});
 	}
 	return out;
@@ -1550,7 +1548,9 @@ function PSSendJudge(node) {
 	const res = PSJudgeRoll(node);
 	if (PSActive) PSActive.lastJudge = res;
 	if (node && node.showResult !== false) {
-		const text = PSApplyTokens(node.text, PSActive ? PSActive.triggerNum : null, PSActive ? PSActive.targetNum : null, node.timeRules, res.label);
+		let text = PSApplyTokens(node.text, PSActive ? PSActive.triggerNum : null, PSActive ? PSActive.targetNum : null, node.timeRules, res.label);
+		text = PSNormalizeText(text);
+		if (!text) text = res.label;   
 		const send = PSSendByType[node.judgeLineType] || PSSendChat;
 		try { send(text); } catch (e) { PSErr("PSSendJudge", e); }
 	}
@@ -2606,6 +2606,7 @@ const PSText = {
 		judgeLte: "≤ 阈值 → 是",
 		judgeShowResult: "显示判定结果",
 		judgeLineType: "结果台词类型",
+		judgeDefaultLine: "判定结果：<roll>",
 		insertRoll: "插入判定结果",
 		addJudge: "+ 添加判定",
 		connectBtn: "连接…",
@@ -2817,6 +2818,7 @@ const PSText = {
 		judgeLte: "≤ threshold → yes",
 		judgeShowResult: "Show the result",
 		judgeLineType: "Result line type",
+		judgeDefaultLine: "Result: <roll>",
 		insertRoll: "Insert result tag",
 		addJudge: "+ Add judge",
 		connectBtn: "Connect…",
@@ -3599,7 +3601,7 @@ function PSUIFlowBuild() {
 	const addJudgeBtn = PSBigBtn(PST("addJudge"), () => {
 		const sc2 = PSFindScript(PSUI.selScriptId);
 		if (!sc2) { PSToast(PST("toastNoSelScript")); return; }
-		const n = PSAddNode(sc2.id, { type: "judge", text: "", delay: 0, enabled: true, showResult: true });
+		const n = PSAddNode(sc2.id, { type: "judge", text: PST("judgeDefaultLine"), delay: 0, enabled: true, showResult: true });
 		if (n) {
 			PSUI.selNodeId = n.id;
 			PSUI.selTrigger = false;
@@ -4558,8 +4560,11 @@ function PSUINodeEditor(box, sc, node) {
 			background: "#10141f", color: PS_TEXT, border: "1px solid " + PS_BORDER,
 			fontFamily: "sans-serif", resize: "vertical", marginBottom: "8px",
 		});
+		const hadTime = String(node.text || "").indexOf(PS_TIME_TOKEN) >= 0;
 		const applyInput = () => {
 			PSUpdateNode(sc.id, node.id, { text: ta.value });
+			
+			if ((String(ta.value || "").indexOf(PS_TIME_TOKEN) >= 0) !== hadTime) { PSUIRenderAll(); return; }
 			
 			const card = PSUI.flowCards.find((c) => c.id === node.id);
 			if (card && card.previewEl) card.previewEl.textContent = PSUINodePreview(ta.value);
@@ -4586,9 +4591,6 @@ function PSUINodeEditor(box, sc, node) {
 		const tagBtn3 = PSSmallBtn(PST("insertTime"), () => { insertToken(PS_TIME_TOKEN); PSUIRenderAll(); });
 		tagBtn3.title = PS_TIME_TOKEN;
 		tagRow.appendChild(tagBtn3);
-		const tagBtn4 = PSSmallBtn(PST("insertRoll"), () => { insertToken(PS_ROLL_TOKEN); PSUIRenderAll(); });
-		tagBtn4.title = PS_ROLL_TOKEN;
-		tagRow.appendChild(tagBtn4);
 		tagRow.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "12px" }, PSEsc(PST("nickHint"))));
 		sec2.appendChild(tagRow);
 
