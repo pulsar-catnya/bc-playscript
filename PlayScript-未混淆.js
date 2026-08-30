@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.5.6";
+const PS_VERSION = "1.5.8";
  
 let PSLastOutfitBlocked = [];
  
@@ -1404,6 +1404,26 @@ function PSNodeConnectionWouldCycle(nodes, fromId, toId) {
 }
 
  
+function PSBranchNodeSet(nodes) {
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+	const set = new Set();
+	const walk = (id) => {
+		let cur = byId.get(id);
+		while (cur && !set.has(cur.id)) {
+			set.add(cur.id);
+			cur = (cur.nextId && byId.has(cur.nextId)) ? byId.get(cur.nextId) : null;
+		}
+	};
+	nodes.forEach((n) => {
+		if (n.type === "judge") {
+			if (n.yesId) walk(n.yesId);
+			if (n.noId) walk(n.noId);
+		}
+	});
+	return set;
+}
+
+ 
 function PSNodeConnect(scriptId, nodeId, port, targetId) {
 	const sc = PSFindScript(scriptId);
 	if (!sc) return { ok: false, why: "noscript" };
@@ -2026,6 +2046,7 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 		lastJudge: null,        
 		steps: 0,               
 		hasLinks: nodes.some((n) => !!n.nextId || (n.type === "judge" && (!!n.yesId || !!n.noId))),   
+		branchNodes: PSBranchNodeSet(nodes),   
 	};
 	PSLog("演出开始：", s.name, "共", PSActive.nodes.length, "句");
 	PSToast(PST("toastStarted", s.name, PSActive.nodes.length));
@@ -2044,7 +2065,7 @@ function PSNodeNext(A, cur) {
 		if (t) return t;
 	}
 	
-	if (A.hasLinks) return null;
+	if (A.branchNodes && A.branchNodes.has(cur.id)) return null;
 	const idx = A.nodes.indexOf(cur);
 	return (idx >= 0 && idx < A.nodes.length - 1) ? A.nodes[idx + 1] : null;
 }
@@ -3317,7 +3338,7 @@ function PSUIRoot() {
 		position: "absolute", left: "0", right: "0", top: "104px", bottom: "40px",
 	});
 	PSUI.listEl = PSEl("div", { width: "224px", minWidth: "224px", overflowY: "auto", background: "#181c2a", borderRight: "1px solid " + PS_BORDER, padding: "8px" });
-	PSUI.flowEl = PSEl("div", { flex: "1", minWidth: "0", overflowY: "auto", padding: "10px 14px" });
+	PSUI.flowEl = PSEl("div", { flex: "1", minWidth: "0", overflowY: "auto", overflowX: "auto", padding: "10px 14px" });
 	PSUI.editorEl = PSEl("div", { width: "340px", minWidth: "340px", overflowY: "auto", background: "#181c2a", borderLeft: "1px solid " + PS_BORDER, padding: "10px" });
 	body.appendChild(PSUI.listEl);
 	body.appendChild(PSUI.flowEl);
@@ -3539,7 +3560,7 @@ function PSUIFlowBuild() {
 
 	 
 	const byId = new Map(sc.nodes.map((n) => [n.id, n]));
-	const hasLinks = sc.nodes.some((n) => !!n.nextId || (n.type === "judge" && (!!n.yesId || !!n.noId)));
+	const branchSet = PSBranchNodeSet(sc.nodes);
 	const visited = new Set();
 	const idxOf = (n) => sc.nodes.indexOf(n);
 
@@ -3602,7 +3623,7 @@ function PSUIFlowBuild() {
 	};
 
 	const makeLane = (label, color) => {
-		const lane = PSEl("div", { flex: "1", minWidth: "0", borderLeft: "2px solid " + color, paddingLeft: "6px" });
+		const lane = PSEl("div", { flex: "1", minWidth: "240px", borderLeft: "2px solid " + color, paddingLeft: "6px" });
 		lane.appendChild(PSEl("div", { fontSize: "11px", color: "#d9c2ff", fontWeight: "700", marginBottom: "2px" }, PSEsc(label)));
 		return lane;
 	};
@@ -3624,7 +3645,7 @@ function PSUIFlowBuild() {
 			renderPath(byId.get(n.noId), noLane);
 		} else {
 			let next = n.nextId ? byId.get(n.nextId) : null;
-			if (!next && !hasLinks) {
+			if (!next && !branchSet.has(n.id)) {
 				const idx = idxOf(n);
 				next = (idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
 			}
@@ -3663,10 +3684,15 @@ function PSUIFlowBuild() {
 		const sc2 = PSFindScript(PSUI.selScriptId);
 		if (!sc2) { PSToast(PST("toastNoSelScript")); return; }
 		
+		const sel = PSUI.selNodeId ? sc2.nodes.find((x) => x.id === PSUI.selNodeId) : null;
+		const prev = sc2.nodes.length ? sc2.nodes[sc2.nodes.length - 1] : null;
 		const j = PSAddNode(sc2.id, { type: "judge", text: PST("judgeDefaultLine"), delay: 0, enabled: true, showResult: true });
 		const yesN = PSAddNode(sc2.id, { type: "chat", text: PST("judgeYesPh"), delay: 0, enabled: true });
 		const noN = PSAddNode(sc2.id, { type: "chat", text: PST("judgeNoPh"), delay: 0, enabled: true });
 		PSUpdateNode(sc2.id, j.id, { yesId: yesN.id, noId: noN.id });
+		
+		const anchor = (sel && sel.type !== "judge") ? sel : ((prev && prev.type !== "judge") ? prev : null);
+		if (anchor) PSUpdateNode(sc2.id, anchor.id, { nextId: j.id });
 		if (j) {
 			PSUI.selNodeId = j.id;
 			PSUI.selTrigger = false;
@@ -4758,9 +4784,9 @@ function PSUIConnectEditorRow(box, sc, node, port) {
 	const id = port === "yes" ? node.yesId : (port === "no" ? node.noId : node.nextId);
 	
 	
-	const hasLinks = sc.nodes.some((x) => !!x.nextId || (x.type === "judge" && (!!x.yesId || !!x.noId)));
+	const branchSet = PSBranchNodeSet(sc.nodes);
 	const idx = sc.nodes.indexOf(node);
-	const implicitNext = (!id && !hasLinks && idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
+	const implicitNext = (!id && !branchSet.has(node.id) && idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
 	const row = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
 	const lab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
 	lab.textContent = port === "yes" ? PST("connectYes") : (port === "no" ? PST("connectNo") : PST("connectNextLabel"));
@@ -5264,7 +5290,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_NICK_TOKEN, PSCharDisplayName, PSCharObjectOf, PSTriggerName, PSApplyTokens,
 		PS_TARGET_TOKEN, PSCharIsSelf, PSTargetInRoom,
 		PS_TIME_TOKEN, PSTimeHMToMin, PSTimeRuleMinutes, PSTimeRuleMatch, PSTimeRuleText, PSNormalizeTimeRules, PSNormalizeTimeTriggerRules, PSTimeTriggerScan,
-		PS_ROLL_TOKEN, PSJudgeRoll, PSNodeEdges, PSNodeConnectionWouldCycle, PSNodeConnect, PSNodeDisconnect, PSAddNodeAfter, PSValidDiceExpr,
+		PS_ROLL_TOKEN, PSJudgeRoll, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSAddNodeAfter, PSValidDiceExpr,
 		PS_ACT_ALIASES,
 		PSFire, PSRun, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
 		PSInstallHooks, PSInputClear, PSHookWhen,
