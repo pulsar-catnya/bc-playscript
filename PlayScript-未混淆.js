@@ -13,7 +13,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.5.9";
+const PS_VERSION = "1.5.10";
  
 let PSLastOutfitBlocked = [];
  
@@ -3634,19 +3634,26 @@ function PSUIFlowBuild() {
 	const renderPath = (n, lane) => {
 		if (!n || visited.has(n.id)) return;
 		visited.add(n.id);
-		lane.appendChild(connector(n));
-		lane.appendChild(makeCard(n));
 		if (n.type === "judge") {
 			
+			
+			const jBox = PSEl("div", { display: "inline-flex", flexDirection: "column", alignItems: "stretch", verticalAlign: "top" });
+			const card = makeCard(n);
+			card.style.maxWidth = "none";
+			jBox.appendChild(card);
 			const cols = PSEl("div", { display: "flex", gap: "8px", alignItems: "flex-start", flexWrap: "nowrap" });
 			const yesLane = makeLane(PST("connectYes"), "#2c7a70");
 			const noLane = makeLane(PST("connectNo"), "#7a2c3a");
 			cols.appendChild(yesLane);
 			cols.appendChild(noLane);
-			lane.appendChild(cols);
+			jBox.appendChild(cols);
+			lane.appendChild(connector(n));
+			lane.appendChild(jBox);
 			renderPath(byId.get(n.yesId), yesLane);
 			renderPath(byId.get(n.noId), noLane);
 		} else {
+			lane.appendChild(connector(n));
+			lane.appendChild(makeCard(n));
 			let next = n.nextId ? byId.get(n.nextId) : null;
 			if (!next && !branchSet.has(n.id)) {
 				const idx = idxOf(n);
