@@ -1,3 +1,4 @@
+// Mathematics never lies
 
 
  
@@ -240,7 +241,8 @@ const PSStore = {
 							diceExpr: PSValidDiceExpr(n.diceExpr) ? String(n.diceExpr).trim() : "1d6",
 							diceRule: n.diceRule === "lte" ? "lte" : "gte",
 							diceThreshold: PSClamp(Number(n.diceThreshold) || 4, 1, 100000),
-							showResult: n.showResult !== false,
+							showResult: n.showResult === true,
+							stop: n.stop === true,
 							judgeLineType: ["chat", "rp", "narr", "action"].includes(n.judgeLineType) ? n.judgeLineType : "chat",
 							diceBranches: PSNormalizeDiceBranches(n.diceBranches),
 							playerIds: PSNormalizePlayerIds(n.playerIds),
@@ -725,6 +727,23 @@ function PSCloudInfo() {
 }
 
  
+function PSCloudBioUsage() {
+	const total = PS_BIO_MAX;
+	try {
+		if (typeof Player === "undefined" || !Player || typeof Player.Description !== "string") return { used: null, total };
+		const b = PSBioBlockBounds(Player.Description);
+		if (!b || b.packIdx < 0 || b.endIdx < 0) return { used: 0, total };
+		const section = Player.Description.slice(b.packIdx, b.endIdx);
+		let used = Math.max(0, section.length);
+		
+		if (section.endsWith("\r\n")) used -= 2;
+		else if (section.endsWith("\n")) used -= 1;
+		else if (section.endsWith("\\n")) used -= 2;
+		return { used: Math.max(0, used), total };
+	} catch (e) { return { used: null, total }; }
+}
+
+ 
 function PSMakeDemoScript() {
 	return {
 		id: "demo1",
@@ -901,7 +920,8 @@ function PSAddNode(scriptId, node, atIdx) {
 		diceExpr: PSValidDiceExpr(node && node.diceExpr) ? String(node.diceExpr).trim() : "1d6",
 		diceRule: (node && node.diceRule === "lte") ? "lte" : "gte",
 		diceThreshold: PSClamp(Number((node && node.diceThreshold) || 4), 1, 100000),
-		showResult: !node || node.showResult !== false,
+		showResult: !!(node && node.showResult === true),
+		stop: !!(node && node.stop),
 		judgeLineType: (node && ["chat", "rp", "narr", "action"].includes(node.judgeLineType)) ? node.judgeLineType : "chat",
 		diceBranches: PSNormalizeDiceBranches(node && node.diceBranches),
 		playerIds: PSNormalizePlayerIds(node && node.playerIds),
@@ -941,15 +961,54 @@ function PSDeleteNode(scriptId, nodeId) {
 }
 
  
+function PSMainChainOrder(sc) {
+	if (!sc || !Array.isArray(sc.nodes) || !sc.nodes.length) return [];
+	const byId = new Map(sc.nodes.map((n) => [n.id, n]));
+	const branchSet = PSBranchNodeSet(sc.nodes);
+	const out = [];
+	const seen = new Set();
+	let cur = sc.nodes[0] || null;
+	while (cur && !seen.has(cur.id)) {
+		seen.add(cur.id);
+		out.push(cur.id);
+		if (cur.type === "judge") break;
+		let next = cur.nextId ? byId.get(cur.nextId) : null;
+		if (!next && !cur.stop && !branchSet.has(cur.id)) {
+			const idx = sc.nodes.indexOf(cur);
+			next = (idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
+		}
+		cur = next;
+	}
+	return out;
+}
+
+ 
 function PSMoveNode(scriptId, nodeId, dir) {
 	const sc = PSFindScript(scriptId);
 	if (!sc) return -1;
-	const from = sc.nodes.findIndex((n) => n.id === nodeId);
-	if (from < 0) return -1;
-	const to = PSClamp(from + dir, 0, sc.nodes.length - 1);
-	if (to === from) return from;
-	PSMoveNodeTo(sc, nodeId, to);
-	return to;
+	const chain = PSMainChainOrder(sc);
+	const idx = chain.indexOf(nodeId);
+	if (idx < 0) return -1;
+	const j = idx + (dir < 0 ? -1 : 1);
+	if (j < 0 || j >= chain.length) return -1;
+	const lo = Math.min(idx, j), hi = Math.max(idx, j);
+	const before = sc.nodes.find((n) => n.id === chain[lo]);
+	const after = sc.nodes.find((n) => n.id === chain[hi]);
+	if (!before || !after || before.type === "judge" || after.type === "judge") return -1;
+	const prev = (lo > 0) ? sc.nodes.find((n) => n.id === chain[lo - 1]) : null;
+	const next = (hi < chain.length - 1) ? sc.nodes.find((n) => n.id === chain[hi + 1]) : null;
+	
+	if (prev) PSUpdateNode(sc.id, prev.id, { nextId: after.id, stop: false });
+	PSUpdateNode(sc.id, after.id, { nextId: before.id, stop: false });
+	PSUpdateNode(sc.id, before.id, { nextId: next ? next.id : null, stop: !next });
+	
+	const ia = sc.nodes.indexOf(before), ib = sc.nodes.indexOf(after);
+	if (ia >= 0 && ib >= 0) {
+		sc.nodes[ia] = after;
+		sc.nodes[ib] = before;
+	}
+	PSStore.requestSave();
+	return j;
 }
 
 function PSMoveNodeTo(sc, nodeId, toIdx) {
@@ -998,6 +1057,7 @@ function PSUpdateNode(scriptId, nodeId, patch) {
 	if ("diceRule" in patch) n.diceRule = patch.diceRule === "lte" ? "lte" : "gte";
 	if ("diceThreshold" in patch) n.diceThreshold = PSClamp(Number(patch.diceThreshold) || 4, 1, 100000);
 	if ("showResult" in patch) n.showResult = patch.showResult !== false;
+	if ("stop" in patch) n.stop = patch.stop !== false;
 	if ("judgeLineType" in patch && ["chat", "rp", "narr", "action"].includes(patch.judgeLineType)) n.judgeLineType = patch.judgeLineType;
 	if ("diceBranches" in patch) n.diceBranches = PSNormalizeDiceBranches(patch.diceBranches);
 	if ("playerIds" in patch) n.playerIds = PSNormalizePlayerIds(patch.playerIds);
@@ -1484,9 +1544,23 @@ function PSNormalizeRelationBranches(arr) {
 }
 
  
+function PSAFCIsExtendedLover(C) {
+	try {
+		if (!C) return false;
+		const num = (typeof C.MemberNumber === "number" && C.MemberNumber) ? C.MemberNumber : null;
+		if (num == null) return false;
+		if (typeof window !== "undefined" && window && window.Liko && window.Liko.AFC
+			&& typeof window.Liko.AFC.isLover === "function"
+			&& window.Liko.AFC.isLover(num)) return true;
+	} catch (e) {   }
+	return false;
+}
+
+ 
 function PSRelationOf(C) {
 	try { if (C && typeof C.IsOwner === "function" && C.IsOwner()) return "owner"; } catch (e) {}
 	try { if (C && typeof C.IsLoverOfPlayer === "function" && C.IsLoverOfPlayer()) return "lover"; } catch (e) {}
+	try { if (C && PSAFCIsExtendedLover(C)) return "lover"; } catch (e) {}
 	try {
 		if (typeof Player !== "undefined" && Player && typeof Player.HasOnWhitelist === "function" && Player.HasOnWhitelist(C)) return "white";
 	} catch (e) {}
@@ -1727,7 +1801,7 @@ function PSNodeEdges(nodes) {
 			if (n.elseId && byId.has(n.elseId)) edges.get(n.id).push(n.elseId);
 		} else if (n.nextId && byId.has(n.nextId)) {
 			edges.get(n.id).push(n.nextId);
-		} else if (nodes[i + 1]) {
+		} else if (!n.stop && nodes[i + 1]) {
 			edges.get(n.id).push(nodes[i + 1].id);
 		}
 	});
@@ -1801,7 +1875,7 @@ function PSNodeConnect(scriptId, nodeId, port, targetId) {
 		if (!branches.some((b) => b.id === bid)) return { ok: false, why: "bad" };
 		patch = { relationBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: targetId }) : b) };
 	} else {
-		patch = { nextId: targetId };
+		patch = { nextId: targetId, stop: false };
 	}
 	PSUpdateNode(sc.id, nodeId, patch);
 	return { ok: true };
@@ -1826,9 +1900,51 @@ function PSNodeDisconnect(scriptId, nodeId, port) {
 		const branches = PSNormalizeRelationBranches(node.relationBranches);
 		patch = { relationBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: null }) : b) };
 	} else {
-		patch = { nextId: null };
+		patch = { nextId: null, stop: true };
 	}
 	return PSUpdateNode(sc.id, nodeId, patch);
+}
+
+ 
+function PSNodePreviousOf(nodes, nodeId) {
+	if (!Array.isArray(nodes)) return null;
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+	const node = byId.get(nodeId);
+	if (!node || node.type === "judge") return null;
+	for (const n of nodes) {
+		if (n.type !== "judge" && n.nextId === nodeId) return n;
+	}
+	const branchSet = PSBranchNodeSet(nodes);
+	const idx = nodes.indexOf(node);
+	if (idx > 0 && !branchSet.has(node.id)) {
+		const p = nodes[idx - 1];
+		if (p && p.type !== "judge" && !p.nextId && !p.stop && !branchSet.has(p.id)) return p;
+	}
+	return null;
+}
+
+ 
+function PSNodeConnectPrevious(scriptId, nodeId, targetId) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return { ok: false, why: "noscript" };
+	const node = sc.nodes.find((n) => n.id === nodeId);
+	const target = sc.nodes.find((n) => n.id === targetId);
+	if (!node || !target || node.type === "judge" || target.type === "judge") return { ok: false, why: "bad" };
+	if (PSNodeConnectionWouldCycle(sc.nodes, targetId, nodeId)) {
+		try { PSToast(PST("connectWouldLoop")); } catch (e) {   }
+		return { ok: false, why: "loop" };
+	}
+	PSUpdateNode(sc.id, targetId, { nextId: nodeId, stop: false });
+	return { ok: true };
+}
+
+ 
+function PSNodeDisconnectPrevious(scriptId, nodeId) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return false;
+	const prev = PSNodePreviousOf(sc.nodes, nodeId);
+	if (!prev) return false;
+	return PSUpdateNode(sc.id, prev.id, { nextId: null, stop: true });
 }
 
  
@@ -1840,7 +1956,7 @@ function PSAddNodeAfter(scriptId, nodeId, opts) {
 	if (sc.nodes.length >= PS_MAX_NODES) { PSToast(PST("toastMaxNodes", PS_MAX_NODES)); return null; }
 	const n = PSAddNode(scriptId, opts, sc.nodes.indexOf(ref) + 1);
 	if (n && ref.type !== "judge") {
-		PSUpdateNode(scriptId, ref.id, { nextId: n.id });
+		PSUpdateNode(scriptId, ref.id, { nextId: n.id, stop: false });
 	}
 	return n;
 }
@@ -2419,6 +2535,7 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			diceRule: n.diceRule === "lte" ? "lte" : "gte",
 			diceThreshold: Number(n.diceThreshold) || 4,
 			showResult: n.showResult !== false,
+			stop: !!n.stop,
 			judgeLineType: ["chat", "rp", "narr", "action"].includes(n.judgeLineType) ? n.judgeLineType : "chat",
 			diceBranches: Array.isArray(n.diceBranches) ? n.diceBranches.slice() : [],
 			playerIds: Array.isArray(n.playerIds) ? n.playerIds.slice() : [],
@@ -2454,6 +2571,8 @@ function PSNodeNext(A, cur) {
 		const t = A.nodes.find((n) => n.id === cur.nextId);
 		if (t) return t;
 	}
+	
+	if (cur.stop) return null;
 	
 	if (A.branchNodes && A.branchNodes.has(cur.id)) return null;
 	const idx = A.nodes.indexOf(cur);
@@ -3243,6 +3362,10 @@ const PSText = {
 		connectNo: "否",
 		connectNext: "下一句",
 		connectNextLabel: "连接下一句",
+		connectPrev: "上一句",
+		connectPrevLabel: "连接上一句",
+		connectPrevHint: "选一个节点作为当前节点的上一句",
+		connectStopped: "（已断开，不再继续）",
 		connectWouldLoop: "这样连接会循环演出刷屏，已取消本次连接",
 		outfitHint: "粘贴 BCX 服装代码（在 BCX 衣柜里导出的服装/物品代码，LZString 或 JSON 格式，长代码也支持）；演出时应用到目标角色；应用走游戏权限校验",
 		outfitTargetLabel: "应用目标",
@@ -3321,6 +3444,15 @@ const PSText = {
 		bioTooBig: "BIO 备份放不下（玩家描述上限 10000 字符）：勾选的剧本太多，请减少勾选「在线备份存储」的剧本",
 		cloudCapLabel: "在线备份上限（KB，0=不限）",
 		cloudCheckBtn: "在线存储空间",
+		cloudWinTitle: "在线存储空间",
+		cloudAccountUsed: "账号数据总量",
+		cloudAccountAvailable: "账号可用空间",
+		cloudSelfUsed: "本插件占用",
+		cloudSelfCap: "上限 {0}K",
+		cloudExtension: "ExtensionSettings",
+		cloudBioUsed: "BIO 备份",
+		cloudAccountMissing: "未登录：暂无账号数据",
+		cloudAccountPartial: "账号快照缺失：重连或下次登录前加载本插件后补全",
 		cloudInfo: "在线存储：账号数据共 {0}K / 上限 {5}K，可用 {1}K；本插件占用 {2}K（上限 {3}K）；ExtensionSettings {4}K",
 		cloudInfoNone: "在线存储：暂未收到登录账号数据（登录后重试）；本插件上限 {0}K",
 		cloudInfoPartial: "在线存储：账号数据总量会在进行一次重连后补全，或请在下次登录前加载本插件即可登录后补全；本插件占用 {0}K（上限 {1}K）；ExtensionSettings {2}K；服务器上限 {3}K",
@@ -3489,6 +3621,10 @@ const PSText = {
 		connectNo: "No",
 		connectNext: "Next",
 		connectNextLabel: "Connect next",
+		connectPrev: "Previous",
+		connectPrevLabel: "Connect previous",
+		connectPrevHint: "Choose a node to become this node's previous line",
+		connectStopped: "(disconnected, ends here)",
 		connectWouldLoop: "This connection would loop the show forever; it was cancelled",
 		outfitHint: "Paste a BCX clothing code (exported from the BCX wardrobe, LZString or JSON format); applied to the target at play time with game permission checks",
 		outfitTargetLabel: "Apply to",
@@ -3567,6 +3703,15 @@ const PSText = {
 		bioTooBig: "BIO backup doesn't fit (profile description limit 10000 chars): too many scripts with \"online backup\" checked — uncheck some",
 		cloudCapLabel: "Online backup cap (KB, 0=unlimited)",
 		cloudCheckBtn: "Online storage",
+		cloudWinTitle: "Online storage",
+		cloudAccountUsed: "Account data total",
+		cloudAccountAvailable: "Account available",
+		cloudSelfUsed: "This plugin",
+		cloudSelfCap: "cap {0}K",
+		cloudExtension: "ExtensionSettings",
+		cloudBioUsed: "BIO backup",
+		cloudAccountMissing: "Not logged in: no account data",
+		cloudAccountPartial: "Account snapshot missing: reconnect or load this plugin before your next login",
 		cloudInfo: "Online storage: account data {0}K / {5}K limit, {1}K available; this plugin uses {2}K (cap {3}K); ExtensionSettings {4}K",
 		cloudInfoNone: "Online storage: no account data received yet (try after login); this plugin's cap is {0}K",
 		cloudInfoPartial: "Online storage: account total will be filled in after a reconnect, or load this plugin before your next login so it can be captured after login; this plugin uses {0}K (cap {1}K); ExtensionSettings {2}K; server limit {3}K",
@@ -3633,6 +3778,7 @@ const PSUI = {
 	interactActWin: null, interactActOpen: false, interactActGroup: null, interactActList: [],
 	interactActTitleEl: null, interactActChipEl: null, interactActListEl: null,
 	connectWin: null, connectTitleEl: null, connectListEl: null, connectScriptId: null, connectNodeId: null, connectPort: "next",
+	cloudWin: null, cloudTitleEl: null, cloudBodyEl: null,
 	dot: null,
 	toastEl: null, toastTimer: null,
 	win: { x: null, y: null, w: 1000, h: 640, minimized: false, editorW: 340 },
@@ -3919,17 +4065,8 @@ function PSUIRoot() {
 	bar.appendChild(PSUI.langBtnEl);
 	
 	PSUI.btnCloud = PSBigBtn(PST("cloudCheckBtn"), () => {
-		const info = PSCloudInfo();
-		const loggedIn = typeof Player !== "undefined" && Player && typeof Player.CharacterID === "string" && Player.CharacterID !== "";
-		if (info.used == null) {
-			if (!loggedIn) { PSToast(PST("cloudInfoNone", info.capKB)); return; }
-			
-			PSToast(PST("cloudInfoPartial", PSByteToKB(info.self), info.capKB, PSByteToKB(info.extensionBytes), PSByteToKB(info.limit)));
-			try { console.log("[PlayScript] 在线存储（部分）:", JSON.stringify(info)); } catch (e) {   }
-			return;
-		}
-		PSToast(PST("cloudInfo", PSByteToKB(info.used), PSByteToKB(info.available), PSByteToKB(info.self), info.capKB, PSByteToKB(info.extensionBytes), PSByteToKB(info.limit)));
-		try { console.log("[PlayScript] 在线存储:", JSON.stringify(info)); } catch (e) {   }
+		PSUICloudWinOpen();
+		try { console.log("[PlayScript] 在线存储:", JSON.stringify(PSCloudInfo())); } catch (e) {   }
 	});
 	bar.appendChild(PSUI.btnCloud);
 	const capWrap = PSEl("span", { display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "12px", color: PS_TEXT_DIM });
@@ -4213,6 +4350,7 @@ function PSUIFlowBuild() {
 	 
 	const byId = new Map(sc.nodes.map((n) => [n.id, n]));
 	const branchSet = PSBranchNodeSet(sc.nodes);
+	const mainChain = new Set(PSMainChainOrder(sc));
 	const visited = new Set();
 	const idxOf = (n) => sc.nodes.indexOf(n);
 
@@ -4269,8 +4407,10 @@ function PSUIFlowBuild() {
 		cb.addEventListener("click", (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); });
 		cb.addEventListener("change", () => { PSUpdateNode(sc.id, n.id, { enabled: cb.checked }); PSUIRenderAll(); });
 		card.appendChild(cb);
-		card.appendChild(PSSmallBtn("↑", () => { PSMoveNode(sc.id, n.id, -1); PSUIRenderAll(); }, { title: PST("moveUp") }));
-		card.appendChild(PSSmallBtn("↓", () => { PSMoveNode(sc.id, n.id, +1); PSUIRenderAll(); }, { title: PST("moveDown") }));
+		if (n.type !== "judge" && mainChain.has(n.id)) {
+			card.appendChild(PSSmallBtn("↑", () => { PSMoveNode(sc.id, n.id, -1); PSUIRenderAll(); }, { title: PST("moveUp") }));
+			card.appendChild(PSSmallBtn("↓", () => { PSMoveNode(sc.id, n.id, +1); PSUIRenderAll(); }, { title: PST("moveDown") }));
+		}
 		PSUI.flowCards.push({ id: n.id, el: card, previewEl: preview });
 		return card;
 	};
@@ -4322,7 +4462,7 @@ function PSUIFlowBuild() {
 			lane.appendChild(connector(n));
 			lane.appendChild(makeCard(n));
 			let next = n.nextId ? byId.get(n.nextId) : null;
-			if (!next && !branchSet.has(n.id)) {
+			if (!next && !n.stop && !branchSet.has(n.id)) {
 				const idx = idxOf(n);
 				next = (idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
 			}
@@ -4346,7 +4486,7 @@ function PSUIFlowBuild() {
 		} else {
 			const prev = sc2.nodes.length ? sc2.nodes[sc2.nodes.length - 1] : null;
 			n = PSAddNode(sc2.id, { type: "chat", text: "", delay: 0, enabled: true });
-			if (n && prev && prev.type !== "judge") PSUpdateNode(sc2.id, prev.id, { nextId: n.id });
+			if (n && prev && prev.type !== "judge") PSUpdateNode(sc2.id, prev.id, { nextId: n.id, stop: false });
 		}
 		if (n) {
 			PSUI.selNodeId = n.id;
@@ -4363,13 +4503,13 @@ function PSUIFlowBuild() {
 		
 		const sel = PSUI.selNodeId ? sc2.nodes.find((x) => x.id === PSUI.selNodeId) : null;
 		const prev = sc2.nodes.length ? sc2.nodes[sc2.nodes.length - 1] : null;
-		const j = PSAddNode(sc2.id, { type: "judge", text: PST("judgeDefaultLine"), delay: 0, enabled: true, showResult: true });
+		const j = PSAddNode(sc2.id, { type: "judge", text: PST("judgeDefaultLine"), delay: 0, enabled: true });
 		const yesN = PSAddNode(sc2.id, { type: "chat", text: PST("judgeYesPh"), delay: 0, enabled: true });
 		const noN = PSAddNode(sc2.id, { type: "chat", text: PST("judgeNoPh"), delay: 0, enabled: true });
 		PSUpdateNode(sc2.id, j.id, { yesId: yesN.id, noId: noN.id });
 		
 		const anchor = (sel && sel.type !== "judge") ? sel : ((prev && prev.type !== "judge") ? prev : null);
-		if (anchor) PSUpdateNode(sc2.id, anchor.id, { nextId: j.id });
+		if (anchor) PSUpdateNode(sc2.id, anchor.id, { nextId: j.id, stop: false });
 		if (j) {
 			PSUI.selNodeId = j.id;
 			PSUI.selTrigger = false;
@@ -5468,7 +5608,7 @@ function PSUINodeEditor(box, sc, node) {
 				const idx = sc.nodes.indexOf(node);
 				const yesN = PSAddNode(sc.id, { type: "chat", text: PST("judgeYesPh"), delay: 0, enabled: true }, idx + 1);
 				const noN = PSAddNode(sc.id, { type: "chat", text: PST("judgeNoPh"), delay: 0, enabled: true }, idx + 2);
-				PSUpdateNode(sc.id, node.id, { type: "judge", text: PST("judgeDefaultLine"), showResult: true, yesId: yesN.id, noId: noN.id, nextId: null });
+				PSUpdateNode(sc.id, node.id, { type: "judge", text: PST("judgeDefaultLine"), showResult: false, yesId: yesN.id, noId: noN.id, nextId: null, stop: false });
 			} else {
 				PSUpdateNode(sc.id, node.id, { type: t });
 			}
@@ -5651,6 +5791,9 @@ function PSUINodeEditor(box, sc, node) {
 		}
 
 		
+		PSUIConnectPrevEditorRow(sec2, sc, node);
+
+		
 		PSUIConnectEditorRow(sec2, sc, node, "next");
 	}
 
@@ -5667,6 +5810,7 @@ function PSUINodeEditor(box, sc, node) {
 
 	const nbtnRow = PSEl("div", { display: "flex", gap: "6px", flexWrap: "wrap" });
 	const idx = sc.nodes.indexOf(node);
+	const canMove = node.type !== "judge" && new Set(PSMainChainOrder(sc)).has(node.id);
 	nbtnRow.appendChild(PSSmallBtn(PST("insBefore"), () => {
 		const n = PSAddNode(sc.id, { type: node.type, text: "", delay: 0, enabled: true }, idx);
 		if (n) { PSUI.selNodeId = n.id; PSUI.focusRequest = true; PSUIRenderAll(); }
@@ -5676,8 +5820,10 @@ function PSUINodeEditor(box, sc, node) {
 		const n = PSAddNodeAfter(sc.id, node.id, { type: node.type, text: "", delay: 0, enabled: true });
 		if (n) { PSUI.selNodeId = n.id; PSUI.focusRequest = true; PSUIRenderAll(); }
 	}));
-	nbtnRow.appendChild(PSSmallBtn(PST("moveUp"), () => { PSMoveNode(sc.id, node.id, -1); PSUIRenderAll(); }));
-	nbtnRow.appendChild(PSSmallBtn(PST("moveDown"), () => { PSMoveNode(sc.id, node.id, +1); PSUIRenderAll(); }));
+	if (canMove) {
+		nbtnRow.appendChild(PSSmallBtn(PST("moveUp"), () => { PSMoveNode(sc.id, node.id, -1); PSUIRenderAll(); }));
+		nbtnRow.appendChild(PSSmallBtn(PST("moveDown"), () => { PSMoveNode(sc.id, node.id, +1); PSUIRenderAll(); }));
+	}
 	const delNodeBtn = PSSmallBtn(PST("delNode"), () => PSArm("delnode:" + node.id, delNodeBtn, PST("delNodeConfirm"), () => { PSDeleteNode(sc.id, node.id); PSUIRenderAll(); }), { bg: "#7a2c3a" });
 	nbtnRow.appendChild(delNodeBtn);
 	sec2.appendChild(nbtnRow);
@@ -5744,25 +5890,54 @@ function PSUIConnectEditorRow(box, sc, node, port) {
 	
 	const branchSet = PSBranchNodeSet(sc.nodes);
 	const idx = sc.nodes.indexOf(node);
-	const implicitNext = (!id && !branchSet.has(node.id) && idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
+	const stopped = !id && !!node.stop;
+	const implicitNext = (port === "next" && !id && !stopped && !branchSet.has(node.id) && idx >= 0 && idx < sc.nodes.length - 1) ? sc.nodes[idx + 1] : null;
 	const row = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
 	const lab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
 	lab.textContent = port === "yes" ? PST("connectYes") : (port === "no" ? PST("connectNo") : PST("connectNextLabel"));
 	row.appendChild(lab);
-	if (id || implicitNext) {
-		const t = id ? PSUINodeTargetLabel(sc, id) : (PSUITypeLabel(implicitNext.type) + "：" + (implicitNext.type === "judge" ? PSUIJudgePreview(implicitNext) : PSUINodePreview(implicitNext.text)));
-		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+	if (id || implicitNext || stopped) {
+		const t = id ? PSUINodeTargetLabel(sc, id)
+			: stopped ? PST("connectStopped")
+			: (PSUITypeLabel(implicitNext.type) + "：" + (implicitNext.type === "judge" ? PSUIJudgePreview(implicitNext) : PSUINodePreview(implicitNext.text)));
+		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: stopped ? PS_TEXT_DIM : PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
 		info.textContent = t || id;
 		info.title = t || id;
 		row.appendChild(info);
-		if (id) {
+		if (id || implicitNext) {
 			const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, node.id, port); PSUIRenderAll(); });
 			row.appendChild(disc);
+		} else {
+			const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, port));
+			row.appendChild(btn);
 		}
 	} else {
 		const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, port));
 		row.appendChild(btn);
 		row.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc(PST("connectHint"))));
+	}
+	box.appendChild(row);
+}
+
+ 
+function PSUIConnectPrevEditorRow(box, sc, node) {
+	const prev = PSNodePreviousOf(sc.nodes, node.id);
+	const row = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const lab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	lab.textContent = PST("connectPrevLabel");
+	row.appendChild(lab);
+	if (prev) {
+		const t = PSUITypeLabel(prev.type) + "：" + (prev.type === "judge" ? PSUIJudgePreview(prev) : PSUINodePreview(prev.text));
+		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+		info.textContent = t;
+		info.title = t;
+		row.appendChild(info);
+		const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnectPrevious(sc.id, node.id); PSUIRenderAll(); });
+		row.appendChild(disc);
+	} else {
+		const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, "prev"));
+		row.appendChild(btn);
+		row.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc(PST("connectPrevHint"))));
 	}
 	box.appendChild(row);
 }
@@ -6207,6 +6382,7 @@ function PSUIConnectWinRender() {
 	if (port === "yes") portLabel = PST("connectYes");
 	else if (port === "no") portLabel = PST("connectNo");
 	else if (port === "else") portLabel = PST("judgePlayerElse");
+	else if (port === "prev") portLabel = PST("connectPrev");
 	else if (typeof port === "string" && port.indexOf("player:") === 0) {
 		const bid = port.slice("player:".length);
 		const node = sc.nodes.find((n) => n.id === PSUI.connectNodeId);
@@ -6237,12 +6413,78 @@ function PSUIConnectWinRender() {
 		mid.appendChild(PSEl("div", { fontSize: "12px", color: PS_TEXT, whiteSpace: "pre-wrap", overflow: "hidden", maxHeight: "30px", wordBreak: "break-word" }, PSEsc(pv)));
 		row.appendChild(mid);
 		row.addEventListener("click", () => {
-			const r = PSNodeConnect(PSUI.connectScriptId, PSUI.connectNodeId, PSUI.connectPort, n.id);
+			const r = (PSUI.connectPort === "prev")
+				? PSNodeConnectPrevious(PSUI.connectScriptId, PSUI.connectNodeId, n.id)
+				: PSNodeConnect(PSUI.connectScriptId, PSUI.connectNodeId, PSUI.connectPort, n.id);
 			if (r.ok) { PSUIConnectWinClose(); PSUIRenderAll(); }
 			
 		});
 		box.appendChild(row);
 	});
+}
+
+ 
+
+function PSUICloudWinBuild() {
+	if (PSUI.cloudWin || typeof document === "undefined" || !document.body) return;
+	const win = document.createElement("div");
+	win.id = "ps-cloudwin";
+	PSStyle(win, {
+		position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
+		width: "440px", maxHeight: "80vh", zIndex: "2147483560", background: PS_BG,
+		border: "2px solid #ffffff", borderRadius: "10px",
+		boxShadow: "0 8px 40px rgba(0,0,0,.7)", display: "none",
+		color: PS_TEXT, fontFamily: "sans-serif", fontSize: "14px", overflow: "hidden",
+	});
+	const title = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", background: "#141826", borderBottom: "1px solid " + PS_BORDER, userSelect: "none" });
+	title.appendChild(PSEl("span", { color: PS_ACCENT, fontSize: "16px" }, "▶"));
+	PSUI.cloudTitleEl = PSEl("span", { fontWeight: "700", fontSize: "14px", flex: "1" });
+	title.appendChild(PSUI.cloudTitleEl);
+	title.appendChild(PSSmallBtn("✕", PSUICloudWinClose, { title: PST("closeTitle") }));
+	win.appendChild(title);
+	PSUI.cloudBodyEl = PSEl("div", { padding: "12px 14px", overflowY: "auto", maxHeight: "calc(80vh - 44px)" });
+	win.appendChild(PSUI.cloudBodyEl);
+	document.body.appendChild(win);
+	PSUI.cloudWin = win;
+}
+
+function PSUICloudWinOpen() {
+	PSUICloudWinBuild();
+	if (!PSUI.cloudWin) return;
+	PSUI.cloudWin.style.display = "block";
+	PSUICloudWinRender();
+}
+
+function PSUICloudWinClose() {
+	if (PSUI.cloudWin) PSUI.cloudWin.style.display = "none";
+}
+
+function PSUICloudWinRender() {
+	const box = PSUI.cloudBodyEl;
+	if (!box) return;
+	box.innerHTML = "";
+	if (PSUI.cloudTitleEl) PSUI.cloudTitleEl.textContent = PST("cloudWinTitle");
+	const info = PSCloudInfo();
+	const bio = PSCloudBioUsage();
+	const loggedIn = typeof Player !== "undefined" && Player && typeof Player.CharacterID === "string" && Player.CharacterID !== "";
+	const kb = (n) => (isFinite(Number(n)) ? (PSByteToKB(Number(n)) + "K") : "—");
+	const row = (label, value, dim) => {
+		const r = PSEl("div", { display: "flex", gap: "10px", padding: "7px 0", borderBottom: "1px solid " + PS_BORDER, fontSize: "13px" });
+		const l = PSEl("div", { width: "150px", minWidth: "150px", color: PS_TEXT_DIM });
+		l.textContent = label;
+		r.appendChild(l);
+		const v = PSEl("div", { flex: "1", textAlign: "right", color: dim ? PS_TEXT_DIM : PS_TEXT, wordBreak: "break-all" });
+		v.textContent = value;
+		r.appendChild(v);
+		box.appendChild(r);
+	};
+	row(PST("cloudAccountUsed"),
+		info.used == null ? (loggedIn ? PST("cloudAccountPartial") : PST("cloudAccountMissing"))
+		: (kb(info.used) + " / " + kb(info.limit)));
+	if (info.available != null) row(PST("cloudAccountAvailable"), kb(info.available));
+	row(PST("cloudSelfUsed"), kb(info.self) + (info.capKB ? "（" + PST("cloudSelfCap", info.capKB) + "）" : ""));
+	row(PST("cloudExtension"), kb(info.extensionBytes) + "（" + info.extensionChars + " 字符）");
+	row(PST("cloudBioUsed"), bio.used == null ? "—" : (bio.used + " / " + bio.total + " 字符"));
 }
 
 function PSUIRenderAll() {
@@ -6252,6 +6494,7 @@ function PSUIRenderAll() {
 	PSUIFlowBuild();
 	PSUIEditorBuild();
 	PSUIRenderStatus();
+	if (PSUI.cloudWin && PSUI.cloudWin.style.display !== "none") PSUICloudWinRender();
 	
 	if (PSUI.langBtnEl) PSUI.langBtnEl.textContent = PST("langBtn");
 	if (PSUI.titleText) PSUI.titleText.textContent = PST("title");
@@ -6362,6 +6605,8 @@ function PSExposeAPI() {
 		UpdateNode: (scriptId, nodeId, patch) => PSUpdateNode(scriptId, nodeId, patch),
 		DeleteNode: (scriptId, nodeId) => PSDeleteNode(scriptId, nodeId),
 		MoveNode: (scriptId, nodeId, dir) => PSMoveNode(scriptId, nodeId, dir),
+		ConnectPrevious: (scriptId, nodeId, targetId) => PSNodeConnectPrevious(scriptId, nodeId, targetId),
+		DisconnectPrevious: (scriptId, nodeId) => PSNodeDisconnectPrevious(scriptId, nodeId),
 		Fire: (scriptId, opts) => PSFire(scriptId, opts || { manual: true }),
 		Stop: PSStop,
 		IsRunning: () => !!PSActive,
@@ -6372,6 +6617,7 @@ function PSExposeAPI() {
 		CleanLSCGBackups: PSCleanLSCGBackups,
 		CloudInfo: PSCloudInfo,
 		CloudLimit: PSCloudLimit,
+		CloudBioUsage: PSCloudBioUsage,
 		
 		DebugOutfit: (code) => {
 			const bundle = PSDecodeOutfitCode(PSNormalizeCode(code));
@@ -6418,10 +6664,10 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_NICK_TOKEN, PSCharDisplayName, PSCharObjectOf, PSTriggerName, PSApplyTokens,
 		PS_TARGET_TOKEN, PSCharIsSelf, PSTargetInRoom,
 		PS_TIME_TOKEN, PSTimeHMToMin, PSTimeRuleMinutes, PSTimeRuleMatch, PSTimeRuleText, PSNormalizeTimeRules, PSNormalizeTimeTriggerRules, PSTimeTriggerScan,
-		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSJudgeBranchSubtree, PSJudgeSwitchType, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSAddNodeAfter, PSValidDiceExpr, PSNormalizeJudgeType, PSNormalizePlayerIds, PSNormalizePlayerBranches, PSJudgeAddPlayerBranch, PSPortTarget,
-		PS_RELATION_ORDER, PSRelationLabel, PSNormalizeRelationBranches, PSJudgeAddRelationBranch, PSRelationOf,
+		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSJudgeBranchSubtree, PSJudgeSwitchType, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSNodePreviousOf, PSNodeConnectPrevious, PSNodeDisconnectPrevious, PSMainChainOrder, PSAddNodeAfter, PSValidDiceExpr, PSNormalizeJudgeType, PSNormalizePlayerIds, PSNormalizePlayerBranches, PSJudgeAddPlayerBranch, PSPortTarget,
+		PS_RELATION_ORDER, PSRelationLabel, PSNormalizeRelationBranches, PSJudgeAddRelationBranch, PSRelationOf, PSAFCIsExtendedLover,
 		PS_ACT_ALIASES,
-		PSFire, PSRun, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
+		PSFire, PSRun, PSNodeNext, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
 		PSInstallHooks, PSInputClear, PSHookWhen,
 		PS_ACTION_GROUPS, PSActGroupLabel, PSActEntriesFor, PSInstallActivityButtonHook,
 		PSActZones, PSActCanvasMap, PSActZoneHitTest, PSUIActPreviewDraw, PSUIActWinOpen, PSUIActWinClose, PSUIActWinSelect,
@@ -6436,7 +6682,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSUIJudgePreview, PSUIConnectWinOpen, PSUIConnectWinClose,
 		PlayScriptOpen, PlayScriptClose, PlayScriptToggle,
 		PSVersion: () => PS_VERSION, PSLastOutfitBlocked: () => PSLastOutfitBlocked.slice(), PSLastOutfitCleared: () => PSLastOutfitCleared.slice(),
-		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
+		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSCloudBioUsage, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
 		PSDebugOutfit: (code) => {
 			const bundle = PSDecodeOutfitCode(PSNormalizeCode(code));
 			if (!bundle) return { version: PS_VERSION, error: "decode-failed" };
