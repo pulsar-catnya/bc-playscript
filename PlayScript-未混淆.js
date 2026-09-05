@@ -1609,8 +1609,7 @@ function PSJudgeRoll(node, targetNum) {
 		if (node && node.judgeType === "room") {
 			const count = PSRoomPlayerCount();
 			const branches = PSNormalizeRoomBranches(node.roomBranches);
-			const sorted = branches.slice().sort((a, b) => b.min - a.min);
-			const br = sorted.find((b) => count >= b.min);
+			const br = branches.find((b) => count >= b.from && count <= b.to);
 			return { yes: false, label: count + "人", targetId: br ? br.nodeId : null };
 		}
 		if (node && node.judgeType === "dice") {
@@ -1670,10 +1669,13 @@ function PSNormalizeRoomBranches(arr) {
 	const out = [];
 	for (const b of arr) {
 		if (!b || typeof b !== "object") continue;
-		const min = Math.max(1, Math.min(100000, Number(b.min) || 1));
+		const from = Math.max(1, Math.min(100000, Number(b.from) || 1));
+		const to = Math.max(1, Math.min(100000, Number(b.to) || from));
+		if (from > to) continue;
 		out.push({
 			id: typeof b.id === "string" ? b.id : PSUid("rmb"),
-			min,
+			from,
+			to,
 			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
 		});
 		if (out.length >= 5) break;
@@ -1742,10 +1744,12 @@ function PSJudgeAddRoomBranch(scriptId, nodeId) {
 	if (!node || node.type !== "judge") return null;
 	const branches = PSNormalizeRoomBranches(node.roomBranches);
 	if (branches.length >= 5) { PSToast(PST("judgeBranchMax")); return null; }
-	const maxMin = branches.reduce((m, b) => Math.max(m, b.min), 0);
+	const last = branches[branches.length - 1];
+	const from = last ? last.to + 1 : 1;
+	const to = from + 4;
 	const n = PSAddNode(scriptId, { type: "chat", text: PST("judgeBranchPh", branches.length + 1), delay: 0, enabled: true });
 	if (!n) return null;
-	const branch = { id: PSUid("rmb"), min: maxMin ? maxMin + 5 : 1, nodeId: n.id };
+	const branch = { id: PSUid("rmb"), from, to, nodeId: n.id };
 	branches.push(branch);
 	PSUpdateNode(scriptId, nodeId, { roomBranches: branches });
 	return branch;
@@ -1846,8 +1850,8 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		PSUpdateNode(sc.id, nodeId, {
 			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], elseId: null,
 			roomBranches: [
-				{ id: PSUid("rmb"), min: 1, nodeId: a ? a.id : null },
-				{ id: PSUid("rmb"), min: 5, nodeId: b ? b.id : null },
+				{ id: PSUid("rmb"), from: 1, to: 5, nodeId: a ? a.id : null },
+				{ id: PSUid("rmb"), from: 6, to: 10, nodeId: b ? b.id : null },
 			],
 		});
 	} else {
@@ -2626,7 +2630,7 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			playerIds: Array.isArray(n.playerIds) ? n.playerIds.slice() : [],
 			playerBranches: Array.isArray(n.playerBranches) ? n.playerBranches.map((b) => ({ id: b.id, ids: (Array.isArray(b.ids) ? b.ids.slice() : []), nodeId: b.nodeId })) : [],
 			relationBranches: Array.isArray(n.relationBranches) ? n.relationBranches.map((b) => ({ id: b.id, rel: b.rel, nodeId: b.nodeId })) : [],
-			roomBranches: Array.isArray(n.roomBranches) ? n.roomBranches.map((b) => ({ id: b.id, min: b.min, nodeId: b.nodeId })) : [],
+			roomBranches: Array.isArray(n.roomBranches) ? n.roomBranches.map((b) => ({ id: b.id, from: b.from, to: b.to, nodeId: b.nodeId })) : [],
 			elseId: (typeof n.elseId === "string" && n.elseId) ? n.elseId : null,
 		})),
 		idx: -1,
@@ -3423,9 +3427,8 @@ const PSText = {
 		judgeRelation: "玩家关系判定",
 		judgeRelationHint: "判定对方与我的关系，按 主人→恋人→白名单→好友→无关系 的固定顺序走对应分支",
 		judgeRoom: "房间人数判定",
-		judgeRoomHint: "判定当前房间人数，走满足「人数 ≥ 下限」里下限最大的分支。例如：1 = 少于5人、5 = 5人以上、10 = 10人以上；最多 5 个分支",
-		judgeRoomMinSuffix: "人及以上",
-		judgeRoomBranchLabel: "≥{0}人",
+		judgeRoomHint: "判定当前房间人数，走第一个「人数在区间内」的分支（含上下限）。例如：2~5、6~10；最多 5 个分支",
+		judgeRoomBranchRangeLabel: "{0}~{1}人",
 		relOwner: "主人",
 		relLover: "恋人",
 		relWhite: "白名单",
@@ -3686,9 +3689,8 @@ const PSText = {
 		judgeRelation: "Relationship",
 		judgeRelationHint: "Judge the other player's relationship to you, routed in fixed order: Owner → Lover → Whitelist → Friend → No relationship",
 		judgeRoom: "Room population",
-		judgeRoomHint: "Judge the current room population, routed to the branch with the largest lower bound that is ≤ the current count. Example: 1 = fewer than 5, 5 = 5 or more, 10 = 10 or more; up to 5 branches",
-		judgeRoomMinSuffix: "or more",
-		judgeRoomBranchLabel: "≥{0}",
+		judgeRoomHint: "Judge the current room population, routed to the first branch whose range contains the current count (inclusive). Example: 2–5, 6–10; up to 5 branches",
+		judgeRoomBranchRangeLabel: "{0}–{1}",
 		relOwner: "Owner",
 		relLover: "Lover",
 		relWhite: "Whitelist",
@@ -4540,7 +4542,7 @@ function PSUIFlowBuild() {
 				branchDefs = rbs.map((b) => ({ label: PSRelationLabel(b.rel), nodeId: b.nodeId, color: "#2c7a9f" }));
 			} else if (n.judgeType === "room") {
 				const rbs = Array.isArray(n.roomBranches) ? n.roomBranches : [];
-				branchDefs = rbs.map((b) => ({ label: PST("judgeRoomBranchLabel", b.min), nodeId: b.nodeId, color: "#3f8f86" }));
+				branchDefs = rbs.map((b) => ({ label: PST("judgeRoomBranchRangeLabel", b.from, b.to), nodeId: b.nodeId, color: "#3f8f86" }));
 			} else {
 				branchDefs = [
 					{ label: PST("connectYes"), nodeId: n.yesId, color: "#2c7a70" },
@@ -4640,7 +4642,7 @@ function PSUIJudgePreview(n) {
 	}
 	if (n && n.judgeType === "room") {
 		const rbs = PSNormalizeRoomBranches(n.roomBranches);
-		const parts = rbs.map((b) => PST("judgeRoomBranchLabel", b.min));
+		const parts = rbs.map((b) => PST("judgeRoomBranchRangeLabel", b.from, b.to));
 		return "房间人数：" + (parts.length ? parts.join("、") : "（未设置分支）");
 	}
 	if (n && n.judgeType === "player") {
@@ -6296,16 +6298,21 @@ function PSUIJudgeRoomBranches(box, sc, node) {
 
 	const branches = PSNormalizeRoomBranches(node.roomBranches);
 	const commit = (next) => { PSUpdateNode(sc.id, node.id, { roomBranches: next }); PSUIRenderAll(); };
-	const setMin = (bid, val) => commit(branches.map((b) => (b.id === bid ? Object.assign({}, b, { min: Math.max(1, Math.min(100000, Number(val) || 1)) }) : b)));
+	const clampNum = (v, fallback) => Math.max(1, Math.min(100000, Number(v) || fallback));
+	const setField = (bid, key, val) => commit(branches.map((b) => (b.id === bid ? Object.assign({}, b, { [key]: clampNum(val, key === "from" ? 1 : b.from) }) : b)));
 	const del = (bid) => commit(branches.filter((b) => b.id !== bid));
 
 	branches.forEach((b, i) => {
 		const row = PSEl("div", { display: "flex", gap: "6px", alignItems: "center", marginBottom: "6px" });
 		row.appendChild(PSEl("span", { width: "46px", minWidth: "46px", fontSize: "12px", color: "#f0b3ff" }, PSEsc(PST("judgePlayerBranchPh", i + 1))));
-		const minInp = PSUIInput(String(b.min), (v) => setMin(b.id, v), { type: "number", min: "1", step: "1" });
-		minInp.style.flex = "0 1 70px";
-		row.appendChild(minInp);
-		row.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc(PST("judgeRoomMinSuffix"))));
+		const fromInp = PSUIInput(String(b.from), (v) => setField(b.id, "from", v), { type: "number", min: "1", step: "1" });
+		fromInp.style.flex = "0 1 70px";
+		row.appendChild(fromInp);
+		row.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "12px" }, "~"));
+		const toInp = PSUIInput(String(b.to), (v) => setField(b.id, "to", v), { type: "number", min: "1", step: "1" });
+		toInp.style.flex = "0 1 70px";
+		row.appendChild(toInp);
+		row.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc("人")));
 		const t = b.nodeId ? PSUINodeTargetLabel(sc, b.nodeId) : null;
 		if (t) {
 			const info = PSEl("span", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, PSEsc(t));
@@ -6550,7 +6557,7 @@ function PSUIConnectWinRender() {
 		const bid = port.slice("room:".length);
 		const node = sc.nodes.find((n) => n.id === PSUI.connectNodeId);
 		const br = node && Array.isArray(node.roomBranches) ? node.roomBranches.find((b) => b.id === bid) : null;
-		portLabel = br ? PST("judgeRoomBranchLabel", br.min) : PST("judgeRoom");
+		portLabel = br ? PST("judgeRoomBranchRangeLabel", br.from, br.to) : PST("judgeRoom");
 	}
 	if (PSUI.connectTitleEl) PSUI.connectTitleEl.textContent = PST("connectWinTitle", portLabel);
 	const others = sc.nodes.filter((n) => n.id !== PSUI.connectNodeId);
