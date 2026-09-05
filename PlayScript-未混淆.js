@@ -249,6 +249,14 @@ const PSStore = {
 							playerBranches: PSNormalizePlayerBranches(n.playerBranches),
 							relationBranches: PSNormalizeRelationBranches(n.relationBranches),
 							roomBranches: PSNormalizeRoomBranches(n.roomBranches),
+							countMode: n.countMode === "interact" ? "interact" : "script",
+							countScriptId: (typeof n.countScriptId === "string" && n.countScriptId) ? n.countScriptId : null,
+							countInteractActions: PSInteractNormalizeActions(n.countInteractActions),
+							countValue: Math.max(0, Number(n.countValue) || 0),
+							countAutoReset: n.countAutoReset === true,
+							countResetSecs: PSClamp(Number(n.countResetSecs) || 86400, 1, 315360000),
+							countNextResetAt: (typeof n.countNextResetAt === "number") ? n.countNextResetAt : null,
+							countBranches: PSNormalizeCountBranches(n.countBranches),
 							elseId: (typeof n.elseId === "string" && n.elseId) ? n.elseId : null,
 						};
 					})
@@ -929,6 +937,14 @@ function PSAddNode(scriptId, node, atIdx) {
 		playerBranches: PSNormalizePlayerBranches(node && node.playerBranches),
 		relationBranches: PSNormalizeRelationBranches(node && node.relationBranches),
 		roomBranches: PSNormalizeRoomBranches(node && node.roomBranches),
+		countMode: (node && node.countMode === "interact") ? "interact" : "script",
+		countScriptId: (node && typeof node.countScriptId === "string" && node.countScriptId) ? node.countScriptId : null,
+		countInteractActions: PSInteractNormalizeActions(node && node.countInteractActions),
+		countValue: Math.max(0, Number((node && node.countValue) || 0)),
+		countAutoReset: !!(node && node.countAutoReset),
+		countResetSecs: PSClamp(Number((node && node.countResetSecs) || 86400), 1, 315360000),
+		countNextResetAt: (node && typeof node.countNextResetAt === "number") ? node.countNextResetAt : null,
+		countBranches: PSNormalizeCountBranches(node && node.countBranches),
 		elseId: (node && typeof node.elseId === "string" && node.elseId) ? node.elseId : null,
 	};
 	if (atIdx === undefined || atIdx === null || atIdx < 0) sc.nodes.push(n);
@@ -956,6 +972,7 @@ function PSDeleteNode(scriptId, nodeId) {
 		if (Array.isArray(n.playerBranches)) n.playerBranches = n.playerBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
 		if (Array.isArray(n.relationBranches)) n.relationBranches = n.relationBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
 		if (Array.isArray(n.roomBranches)) n.roomBranches = n.roomBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
+		if (Array.isArray(n.countBranches)) n.countBranches = n.countBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
 		if (n.elseId && (n.elseId === nodeId || sub.has(n.elseId))) n.elseId = null;
 	});
 	if (PSUI.selNodeId && (PSUI.selNodeId === nodeId || sub.has(PSUI.selNodeId))) PSUI.selNodeId = null;
@@ -1067,6 +1084,14 @@ function PSUpdateNode(scriptId, nodeId, patch) {
 	if ("playerBranches" in patch) n.playerBranches = PSNormalizePlayerBranches(patch.playerBranches);
 	if ("relationBranches" in patch) n.relationBranches = PSNormalizeRelationBranches(patch.relationBranches);
 	if ("roomBranches" in patch) n.roomBranches = PSNormalizeRoomBranches(patch.roomBranches);
+	if ("countMode" in patch) n.countMode = patch.countMode === "interact" ? "interact" : "script";
+	if ("countScriptId" in patch) n.countScriptId = (patch.countScriptId && typeof patch.countScriptId === "string") ? patch.countScriptId : null;
+	if ("countInteractActions" in patch) n.countInteractActions = PSInteractNormalizeActions(patch.countInteractActions);
+	if ("countValue" in patch) n.countValue = Math.max(0, Number(patch.countValue) || 0);
+	if ("countAutoReset" in patch) n.countAutoReset = patch.countAutoReset !== false;
+	if ("countResetSecs" in patch) n.countResetSecs = PSClamp(Number(patch.countResetSecs) || 86400, 1, 315360000);
+	if ("countNextResetAt" in patch) n.countNextResetAt = (typeof patch.countNextResetAt === "number") ? patch.countNextResetAt : null;
+	if ("countBranches" in patch) n.countBranches = PSNormalizeCountBranches(patch.countBranches);
 	if ("elseId" in patch) n.elseId = (patch.elseId && typeof patch.elseId === "string") ? patch.elseId : null;
 	PSStore.requestSave();
 	return true;
@@ -1467,6 +1492,7 @@ function PSNormalizeJudgeType(v) {
 	if (v === "player") return "player";
 	if (v === "relation") return "relation";
 	if (v === "room") return "room";
+	if (v === "count") return "count";
 	return "coin";
 }
 
@@ -1518,6 +1544,11 @@ function PSPortTarget(node, port) {
 	const om = /^room:(.+)$/.exec(String(port));
 	if (om && Array.isArray(node.roomBranches)) {
 		const b = node.roomBranches.find((x) => x.id === om[1]);
+		return (b && b.nodeId) ? b.nodeId : null;
+	}
+	const cm = /^count:(.+)$/.exec(String(port));
+	if (cm && Array.isArray(node.countBranches)) {
+		const b = node.countBranches.find((x) => x.id === cm[1]);
 		return (b && b.nodeId) ? b.nodeId : null;
 	}
 	return null;
@@ -1612,6 +1643,12 @@ function PSJudgeRoll(node, targetNum) {
 			const br = branches.find((b) => count >= b.from && count <= b.to);
 			return { yes: false, label: count + "人", targetId: br ? br.nodeId : null };
 		}
+		if (node && node.judgeType === "count") {
+			const count = Math.max(0, Number(node.countValue) || 0);
+			const branches = PSNormalizeCountBranches(node.countBranches);
+			const br = branches.find((b) => count >= b.from && count <= b.to);
+			return { yes: false, label: count + "次", targetId: br ? br.nodeId : null };
+		}
 		if (node && node.judgeType === "dice") {
 			const m = /^(\d{1,3})[dD](\d{1,4})$/.exec(String(node.diceExpr || "1d6"));
 			const n = m ? Math.min(Number(m[1]), 100) : 1;
@@ -1681,6 +1718,109 @@ function PSNormalizeRoomBranches(arr) {
 		if (out.length >= 5) break;
 	}
 	return out;
+}
+
+ 
+function PSNormalizeCountBranches(arr) {
+	if (!Array.isArray(arr)) return [];
+	const out = [];
+	for (const b of arr) {
+		if (!b || typeof b !== "object") continue;
+		const from = Math.max(0, Math.min(100000, Number(b.from) || 0));
+		const to = Math.max(0, Math.min(100000, Number(b.to) || from));
+		if (from > to) continue;
+		out.push({
+			id: typeof b.id === "string" ? b.id : PSUid("cb"),
+			from,
+			to,
+			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
+		});
+		if (out.length >= 5) break;
+	}
+	return out;
+}
+
+ 
+function PSJudgeAddCountBranch(scriptId, nodeId) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return null;
+	const node = sc.nodes.find((n) => n.id === nodeId);
+	if (!node || node.type !== "judge") return null;
+	const branches = PSNormalizeCountBranches(node.countBranches);
+	if (branches.length >= 5) { PSToast(PST("judgeBranchMax")); return null; }
+	const last = branches[branches.length - 1];
+	const from = last ? last.to + 1 : 1;
+	const to = from + 4;
+	const n = PSAddNode(scriptId, { type: "chat", text: PST("judgeBranchPh", branches.length + 1), delay: 0, enabled: true });
+	if (!n) return null;
+	const branch = { id: PSUid("cb"), from, to, nodeId: n.id };
+	branches.push(branch);
+	PSUpdateNode(scriptId, nodeId, { countBranches: branches });
+	return branch;
+}
+
+ 
+function PSCounterResetIfDue(node, now) {
+	if (!node || node.countAutoReset !== true || !(Number(node.countResetSecs) > 0)) return false;
+	const t = now || Date.now();
+	if (node.countNextResetAt == null || node.countNextResetAt <= t) {
+		node.countValue = 0;
+		node.countNextResetAt = t + Number(node.countResetSecs) * 1000;
+		return true;
+	}
+	return false;
+}
+
+ 
+function PSCounterValue(node, now) {
+	if (PSCounterResetIfDue(node, now)) {
+		try { PSStore.requestSave(); } catch (e) {   }
+	}
+	return (node && typeof node.countValue === "number") ? node.countValue : 0;
+}
+
+ 
+function PSCounterReset(node) {
+	if (!node) return;
+	node.countValue = 0;
+	if (node.countAutoReset === true && Number(node.countResetSecs) > 0) {
+		node.countNextResetAt = Date.now() + Number(node.countResetSecs) * 1000;
+	} else {
+		node.countNextResetAt = null;
+	}
+	PSStore.requestSave();
+}
+
+ 
+function PSCounterRecordScript(scriptId) {
+	if (!PSStore.state || !scriptId) return;
+	let changed = false;
+	for (const sc of PSStore.state.scripts) {
+		for (const n of sc.nodes) {
+			if (!n || n.type !== "judge" || n.judgeType !== "count" || n.countMode !== "script" || n.countScriptId !== scriptId) continue;
+			if (PSCounterResetIfDue(n)) changed = true;
+			n.countValue = (typeof n.countValue === "number" ? n.countValue : 0) + 1;
+			changed = true;
+		}
+	}
+	if (changed) PSStore.requestSave();
+}
+
+ 
+function PSCounterRecordInteract(group, actName) {
+	if (!PSStore.state || !group || !actName) return;
+	let changed = false;
+	for (const sc of PSStore.state.scripts) {
+		if (sc.enabled === false) continue;
+		for (const n of sc.nodes) {
+			if (!n || n.type !== "judge" || n.judgeType !== "count" || n.countMode !== "interact") continue;
+			if (!Array.isArray(n.countInteractActions) || !n.countInteractActions.some((x) => x && x.g === group && x.a === actName)) continue;
+			if (PSCounterResetIfDue(n)) changed = true;
+			n.countValue = (typeof n.countValue === "number" ? n.countValue : 0) + 1;
+			changed = true;
+		}
+	}
+	if (changed) PSStore.requestSave();
 }
 
  
@@ -1767,6 +1907,7 @@ function PSJudgeBranchSubtree(sc, judge) {
 	if (Array.isArray(judge.playerBranches)) judge.playerBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 	if (Array.isArray(judge.relationBranches)) judge.relationBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 	if (Array.isArray(judge.roomBranches)) judge.roomBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
+	if (Array.isArray(judge.countBranches)) judge.countBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 	if (judge.elseId) push(judge.elseId);
 	while (stack.length) {
 		const id = stack.pop();
@@ -1782,6 +1923,7 @@ function PSJudgeBranchSubtree(sc, judge) {
 			if (Array.isArray(n.playerBranches)) n.playerBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 			if (Array.isArray(n.relationBranches)) n.relationBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 			if (Array.isArray(n.roomBranches)) n.roomBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
+			if (Array.isArray(n.countBranches)) n.countBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 			if (n.elseId) push(n.elseId);
 		}
 	}
@@ -1807,6 +1949,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 			if (Array.isArray(n.playerBranches)) n.playerBranches = n.playerBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
 			if (Array.isArray(n.relationBranches)) n.relationBranches = n.relationBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
 			if (Array.isArray(n.roomBranches)) n.roomBranches = n.roomBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
+			if (Array.isArray(n.countBranches)) n.countBranches = n.countBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
 			if (n.elseId && sub.has(n.elseId)) n.elseId = null;
 		});
 		if (PSUI.selNodeId && sub.has(PSUI.selNodeId)) PSUI.selNodeId = nodeId;
@@ -1817,7 +1960,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const a = mk(PST("judgeBranchPh", 1));
 		const b = mk(PST("judgeBranchPh", 2));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, elseId: null, playerBranches: [], relationBranches: [], roomBranches: [],
+			judgeType: newType, yesId: null, noId: null, elseId: null, playerBranches: [], relationBranches: [], roomBranches: [], countBranches: [],
 			diceBranches: [
 				{ id: PSUid("db"), from: 1, to: 10, nodeId: a ? a.id : null },
 				{ id: PSUid("db"), from: 11, to: 20, nodeId: b ? b.id : null },
@@ -1828,7 +1971,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const b = mk(PST("judgeBranchPh", 2));
 		const e = mk(PST("judgeNoPh"));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, diceBranches: [], relationBranches: [], roomBranches: [], elseId: e ? e.id : null,
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], relationBranches: [], roomBranches: [], countBranches: [], elseId: e ? e.id : null,
 			playerBranches: [
 				{ id: PSUid("pb"), ids: [], nodeId: a ? a.id : null },
 				{ id: PSUid("pb"), ids: [], nodeId: b ? b.id : null },
@@ -1838,7 +1981,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const a = mk(PST("judgeBranchPh", 1));
 		const b = mk(PST("judgeBranchPh", 2));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], roomBranches: [], elseId: null,
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], roomBranches: [], countBranches: [], elseId: null,
 			relationBranches: [
 				{ id: PSUid("rb"), rel: "owner", nodeId: a ? a.id : null },
 				{ id: PSUid("rb"), rel: "none", nodeId: b ? b.id : null },
@@ -1848,10 +1991,22 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const a = mk(PST("judgeBranchPh", 1));
 		const b = mk(PST("judgeBranchPh", 2));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], elseId: null,
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], countBranches: [], elseId: null,
 			roomBranches: [
 				{ id: PSUid("rmb"), from: 1, to: 5, nodeId: a ? a.id : null },
 				{ id: PSUid("rmb"), from: 6, to: 10, nodeId: b ? b.id : null },
+			],
+		});
+	} else if (newType === "count") {
+		const a = mk(PST("judgeBranchPh", 1));
+		const b = mk(PST("judgeBranchPh", 2));
+		PSUpdateNode(sc.id, nodeId, {
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], roomBranches: [], elseId: null,
+			countMode: "script", countScriptId: sc.id, countInteractActions: [],
+			countValue: 0, countAutoReset: false, countResetSecs: 86400, countNextResetAt: null,
+			countBranches: [
+				{ id: PSUid("cb"), from: 1, to: 5, nodeId: a ? a.id : null },
+				{ id: PSUid("cb"), from: 6, to: 10, nodeId: b ? b.id : null },
 			],
 		});
 	} else {
@@ -1859,7 +2014,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const b = mk(PST("judgeNoPh"));
 		PSUpdateNode(sc.id, nodeId, {
 			judgeType: newType, yesId: a ? a.id : null, noId: b ? b.id : null,
-			diceBranches: [], playerBranches: [], relationBranches: [], roomBranches: [], elseId: null,
+			diceBranches: [], playerBranches: [], relationBranches: [], roomBranches: [], countBranches: [], elseId: null,
 		});
 	}
 	return true;
@@ -1877,6 +2032,7 @@ function PSNodeEdges(nodes) {
 			if (Array.isArray(n.playerBranches)) n.playerBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
 			if (Array.isArray(n.relationBranches)) n.relationBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
 			if (Array.isArray(n.roomBranches)) n.roomBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
+			if (Array.isArray(n.countBranches)) n.countBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
 			if (n.elseId && byId.has(n.elseId)) edges.get(n.id).push(n.elseId);
 		} else if (n.nextId && byId.has(n.nextId)) {
 			edges.get(n.id).push(n.nextId);
@@ -1923,6 +2079,7 @@ function PSBranchNodeSet(nodes) {
 			if (Array.isArray(n.playerBranches)) n.playerBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
 			if (Array.isArray(n.relationBranches)) n.relationBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
 			if (Array.isArray(n.roomBranches)) n.roomBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
+			if (Array.isArray(n.countBranches)) n.countBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
 			if (n.elseId) walk(n.elseId);
 		}
 	});
@@ -1959,6 +2116,11 @@ function PSNodeConnect(scriptId, nodeId, port, targetId) {
 		const branches = PSNormalizeRoomBranches(node.roomBranches);
 		if (!branches.some((b) => b.id === bid)) return { ok: false, why: "bad" };
 		patch = { roomBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: targetId }) : b) };
+	} else if (typeof port === "string" && port.indexOf("count:") === 0) {
+		const bid = port.slice("count:".length);
+		const branches = PSNormalizeCountBranches(node.countBranches);
+		if (!branches.some((b) => b.id === bid)) return { ok: false, why: "bad" };
+		patch = { countBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: targetId }) : b) };
 	} else {
 		patch = { nextId: targetId, stop: false };
 	}
@@ -1988,6 +2150,10 @@ function PSNodeDisconnect(scriptId, nodeId, port) {
 		const bid = port.slice("room:".length);
 		const branches = PSNormalizeRoomBranches(node.roomBranches);
 		patch = { roomBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: null }) : b) };
+	} else if (typeof port === "string" && port.indexOf("count:") === 0) {
+		const bid = port.slice("count:".length);
+		const branches = PSNormalizeCountBranches(node.countBranches);
+		patch = { countBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: null }) : b) };
 	} else {
 		patch = { nextId: null, stop: true };
 	}
@@ -2586,6 +2752,7 @@ function PSFire(scriptId, opts) {
 		if (mode === "queue") {
 			if (PSQueue.length >= PS_QUEUE_CAP) { PSToast(PST("toastQueueFull")); return { ok: false, why: "queuefull" }; }
 			PSQueue.push({ id: s.id, triggerNum, targetNum });
+			if (!opts.manual) PSCounterRecordScript(s.id);
 			PSToast(PST("toastQueued", s.name, PSQueue.length));
 			PSLog("已排队：", s.name, "（第", PSQueue.length, "位）");
 			PSUIRenderStatus();
@@ -2594,6 +2761,7 @@ function PSFire(scriptId, opts) {
 		PSAbortCore(true, "restart"); 
 	}
 
+	if (!opts.manual) PSCounterRecordScript(s.id);
 	PSRun(s, enabledNodes, triggerNum, targetNum);
 	return { ok: true };
 }
@@ -2631,6 +2799,14 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			playerBranches: Array.isArray(n.playerBranches) ? n.playerBranches.map((b) => ({ id: b.id, ids: (Array.isArray(b.ids) ? b.ids.slice() : []), nodeId: b.nodeId })) : [],
 			relationBranches: Array.isArray(n.relationBranches) ? n.relationBranches.map((b) => ({ id: b.id, rel: b.rel, nodeId: b.nodeId })) : [],
 			roomBranches: Array.isArray(n.roomBranches) ? n.roomBranches.map((b) => ({ id: b.id, from: b.from, to: b.to, nodeId: b.nodeId })) : [],
+			countMode: n.countMode === "interact" ? "interact" : "script",
+			countScriptId: (typeof n.countScriptId === "string" && n.countScriptId) ? n.countScriptId : null,
+			countInteractActions: Array.isArray(n.countInteractActions) ? n.countInteractActions.slice() : [],
+			countValue: Math.max(0, Number(n.countValue) || 0),
+			countAutoReset: n.countAutoReset === true,
+			countResetSecs: Math.max(1, Number(n.countResetSecs) || 86400),
+			countNextResetAt: (typeof n.countNextResetAt === "number") ? n.countNextResetAt : null,
+			countBranches: Array.isArray(n.countBranches) ? n.countBranches.slice() : [],
 			elseId: (typeof n.elseId === "string" && n.elseId) ? n.elseId : null,
 		})),
 		idx: -1,
@@ -3252,6 +3428,7 @@ function PSInstallHooks(mod) {
 			const actName = (A && typeof A === "object") ? (A.Name || "") : String(A || "");
 			const group = PSActBaseGroup(String(Z || ""));
 			if (!actName || !group) return;
+			PSCounterRecordInteract(group, actName);
 			const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
 			for (const sc of PSStore.state.scripts) {
 				if (sc.enabled === false || !sc.interactTrigger) continue;
@@ -3429,6 +3606,22 @@ const PSText = {
 		judgeRoom: "房间人数判定",
 		judgeRoomHint: "判定当前房间人数，走第一个「人数在区间内」的分支（含上下限）。例如：2~5、6~10；最多 5 个分支",
 		judgeRoomBranchRangeLabel: "{0}~{1}人",
+		judgeCount: "次数扳机（触发次数判定）",
+		judgeCountHint: "统计剧本触发次数或别人对我互动的次数，按次数区间走对应分支；最多 5 个分支",
+		judgeCountSettings: "次数扳机设置",
+		judgeCountMode: "统计类型",
+		judgeCountScript: "剧本触发次数",
+		judgeCountInteract: "互动触发次数",
+		judgeCountScriptTarget: "统计的剧本",
+		judgeCountInteractActions: "统计的互动",
+		judgeCountValue: "当前次数",
+		judgeCountReset: "手动清零",
+		judgeCountAutoReset: "自动清零",
+		judgeCountHours: "时",
+		judgeCountMinutes: "分",
+		judgeCountSeconds: "秒",
+		judgeCountBranchRangeLabel: "{0}~{1}次",
+		countPickScriptTitle: "选择剧本",
 		relOwner: "主人",
 		relLover: "恋人",
 		relWhite: "白名单",
@@ -3691,6 +3884,22 @@ const PSText = {
 		judgeRoom: "Room population",
 		judgeRoomHint: "Judge the current room population, routed to the first branch whose range contains the current count (inclusive). Example: 2–5, 6–10; up to 5 branches",
 		judgeRoomBranchRangeLabel: "{0}–{1}",
+		judgeCount: "Trigger counter",
+		judgeCountHint: "Count script triggers or interactions from others, then route by count range; up to 5 branches",
+		judgeCountSettings: "Trigger counter settings",
+		judgeCountMode: "Count type",
+		judgeCountScript: "Script triggers",
+		judgeCountInteract: "Interaction triggers",
+		judgeCountScriptTarget: "Script to count",
+		judgeCountInteractActions: "Interactions to count",
+		judgeCountValue: "Current count",
+		judgeCountReset: "Reset",
+		judgeCountAutoReset: "Auto reset",
+		judgeCountHours: "h",
+		judgeCountMinutes: "m",
+		judgeCountSeconds: "s",
+		judgeCountBranchRangeLabel: "{0}–{1}",
+		countPickScriptTitle: "Pick script",
 		relOwner: "Owner",
 		relLover: "Lover",
 		relWhite: "Whitelist",
@@ -3870,9 +4079,10 @@ const PSUI = {
 	outfitCodeGroups: [], outfitPickable: [], outfitBundle: [], outfitSel: [], outfitHover: null,
 	outfitTitleEl: null, outfitChipEl: null, outfitCanvas: null,
 	interactWin: null, interactOpen: false, interactScriptId: null, interactCanvas: null, interactHover: null,
-	interactTitleEl: null, interactChipEl: null,
+	interactTitleEl: null, interactChipEl: null, interactKind: "script", interactNodeId: null,
 	interactActWin: null, interactActOpen: false, interactActGroup: null, interactActList: [],
 	interactActTitleEl: null, interactActChipEl: null, interactActListEl: null,
+	scriptPickWin: null, scriptPickListEl: null, scriptPickScriptId: null, scriptPickNodeId: null,
 	connectWin: null, connectTitleEl: null, connectListEl: null, connectScriptId: null, connectNodeId: null, connectPort: "next",
 	cloudWin: null, cloudTitleEl: null, cloudBodyEl: null,
 	dot: null,
@@ -4543,6 +4753,9 @@ function PSUIFlowBuild() {
 			} else if (n.judgeType === "room") {
 				const rbs = Array.isArray(n.roomBranches) ? n.roomBranches : [];
 				branchDefs = rbs.map((b) => ({ label: PST("judgeRoomBranchRangeLabel", b.from, b.to), nodeId: b.nodeId, color: "#3f8f86" }));
+			} else if (n.judgeType === "count") {
+				const cbs = Array.isArray(n.countBranches) ? n.countBranches : [];
+				branchDefs = cbs.map((b) => ({ label: PST("judgeCountBranchRangeLabel", b.from, b.to), nodeId: b.nodeId, color: "#b07f9f" }));
 			} else {
 				branchDefs = [
 					{ label: PST("connectYes"), nodeId: n.yesId, color: "#2c7a70" },
@@ -4644,6 +4857,11 @@ function PSUIJudgePreview(n) {
 		const rbs = PSNormalizeRoomBranches(n.roomBranches);
 		const parts = rbs.map((b) => PST("judgeRoomBranchRangeLabel", b.from, b.to));
 		return "房间人数：" + (parts.length ? parts.join("、") : "（未设置分支）");
+	}
+	if (n && n.judgeType === "count") {
+		const cbs = PSNormalizeCountBranches(n.countBranches);
+		const parts = cbs.map((b) => PST("judgeCountBranchRangeLabel", b.from, b.to));
+		return (n.countMode === "interact" ? "互动次数：" : "剧本触发次数：") + (parts.length ? parts.join("、") : "（未设置分支）");
 	}
 	if (n && n.judgeType === "player") {
 		const pbs = PSNormalizePlayerBranches(n.playerBranches);
@@ -4998,6 +5216,40 @@ function PSInteractWinScript() {
 	return PSFindScript(PSUI.interactScriptId);
 }
 
+ 
+function PSInteractNode() {
+	const sc = PSFindScript(PSUI.interactScriptId);
+	if (PSUI.interactKind === "count" && PSUI.interactNodeId && sc) return sc.nodes.find((n) => n.id === PSUI.interactNodeId) || null;
+	return null;
+}
+
+function PSInteractSelectedActions() {
+	const node = PSInteractNode();
+	if (node) return Array.isArray(node.countInteractActions) ? node.countInteractActions : [];
+	const sc = PSInteractWinScript();
+	return (sc && Array.isArray(sc.interactActions)) ? sc.interactActions : [];
+}
+
+function PSCountInteractGroups(node) {
+	if (!node || !Array.isArray(node.countInteractActions)) return [];
+	const seen = new Set();
+	const out = [];
+	for (const x of node.countInteractActions) {
+		if (x && typeof x.g === "string" && !seen.has(x.g)) { seen.add(x.g); out.push(x.g); }
+	}
+	return out;
+}
+
+function PSCountInteractGroupCount(node, group) {
+	if (!node || !Array.isArray(node.countInteractActions)) return 0;
+	return node.countInteractActions.filter((x) => x && x.g === group).length;
+}
+
+function PSCountInteractHas(node, group, action) {
+	if (!node || !Array.isArray(node.countInteractActions)) return false;
+	return node.countInteractActions.some((x) => x && x.g === group && x.a === action);
+}
+
 function PSInteractBundle() {
 	try {
 		if (typeof Player !== "undefined" && Player && typeof ServerAppearanceBundle === "function") {
@@ -5010,10 +5262,14 @@ function PSInteractBundle() {
 function PSInteractWinRender() {
 	if (!PSUI.interactWin || !PSUI.interactCanvas) return;
 	const sc = PSInteractWinScript();
+	const node = PSInteractNode();
 	if (PSUI.interactTitleEl) PSUI.interactTitleEl.textContent = PST("interactWinTitle") + " · " + (sc ? sc.name : "");
-	if (PSUI.interactChipEl) PSUI.interactChipEl.textContent = PST("interactGroupsN", PSInteractGroups(sc).length, (sc && Array.isArray(sc.interactActions)) ? sc.interactActions.length : 0);
+	if (PSUI.interactChipEl) {
+		if (node) PSUI.interactChipEl.textContent = PST("interactGroupsN", PSCountInteractGroups(node).length, (Array.isArray(node.countInteractActions) ? node.countInteractActions.length : 0));
+		else PSUI.interactChipEl.textContent = PST("interactGroupsN", PSInteractGroups(sc).length, (sc && Array.isArray(sc.interactActions)) ? sc.interactActions.length : 0);
+	}
 	PSPreviewDrawChar(PSUI.interactCanvas, PSInteractBundle());
-	const sel = new Set(PSInteractGroups(sc));
+	const sel = node ? new Set(PSCountInteractGroups(node)) : new Set(PSInteractGroups(sc));
 	PSPreviewDrawZones(PSUI.interactCanvas, (name) => {
 		if (sel.has(name)) return { fill: "rgba(76,175,80,0.35)", stroke: "#66bb6a", width: 2.5 };
 		if (name === PSUI.interactHover) return { fill: "rgba(255,255,255,0.18)", stroke: "rgba(255,255,255,0.85)", width: 2 };
@@ -5085,6 +5341,24 @@ function PSInteractWinOpen() {
 	const sc = PSFindScript(PSUI.selScriptId);
 	if (!sc) { PSToast(PST("toastNoSelScript")); return; }
 	PSUI.interactScriptId = sc.id;
+	PSUI.interactKind = "script";
+	PSUI.interactNodeId = null;
+	PSUI.interactHover = null;
+	PSInteractWinBuild();
+	if (!PSUI.interactWin) return;
+	PSUI.interactOpen = true;
+	PSUI.interactWin.style.display = "block";
+	PSInteractWinRender();
+}
+
+ 
+function PSInteractWinOpenForNode(scriptId, nodeId) {
+	const sc = PSFindScript(scriptId);
+	const node = sc ? sc.nodes.find((n) => n.id === nodeId) : null;
+	if (!sc || !node) return;
+	PSUI.interactScriptId = scriptId;
+	PSUI.interactKind = "count";
+	PSUI.interactNodeId = nodeId;
 	PSUI.interactHover = null;
 	PSInteractWinBuild();
 	if (!PSUI.interactWin) return;
@@ -5155,12 +5429,21 @@ function PSInteractActClose() {
 
 function PSInteractToggleAction(group, action) {
 	const sc = PSInteractWinScript();
+	const node = PSInteractNode();
 	if (!sc) return;
-	const arr = Array.isArray(sc.interactActions) ? sc.interactActions.slice() : [];
-	const i = arr.findIndex((x) => x.g === group && x.a === action);
-	if (i >= 0) arr.splice(i, 1);
-	else arr.push({ g: group, a: action });
-	PSUpdateScript(sc.id, { interactActions: arr });
+	if (node) {
+		const arr = Array.isArray(node.countInteractActions) ? node.countInteractActions.slice() : [];
+		const i = arr.findIndex((x) => x.g === group && x.a === action);
+		if (i >= 0) arr.splice(i, 1);
+		else arr.push({ g: group, a: action });
+		PSUpdateNode(sc.id, node.id, { countInteractActions: arr });
+	} else {
+		const arr = Array.isArray(sc.interactActions) ? sc.interactActions.slice() : [];
+		const i = arr.findIndex((x) => x.g === group && x.a === action);
+		if (i >= 0) arr.splice(i, 1);
+		else arr.push({ g: group, a: action });
+		PSUpdateScript(sc.id, { interactActions: arr });
+	}
 	PSInteractActRender();
 	PSInteractWinRender();
 	PSUIRenderAll();
@@ -5169,9 +5452,10 @@ function PSInteractToggleAction(group, action) {
 function PSInteractActRender() {
 	if (!PSUI.interactActWin) return;
 	const sc = PSInteractWinScript();
+	const node = PSInteractNode();
 	const group = PSUI.interactActGroup;
 	if (PSUI.interactActTitleEl) PSUI.interactActTitleEl.textContent = PST("interactActWinTitle", PSActGroupLabel(group));
-	if (PSUI.interactActChipEl) PSUI.interactActChipEl.textContent = PST("interactCurrent", PSInteractGroupCount(sc, group));
+	if (PSUI.interactActChipEl) PSUI.interactActChipEl.textContent = PST("interactCurrent", node ? PSCountInteractGroupCount(node, group) : PSInteractGroupCount(sc, group));
 	const listEl = PSUI.interactActListEl;
 	if (!listEl) return;
 	listEl.innerHTML = "";
@@ -5180,7 +5464,7 @@ function PSInteractActRender() {
 		return;
 	}
 	for (const a of PSUI.interactActList) {
-		const on = PSInteractHas(sc, group, a);
+		const on = node ? PSCountInteractHas(node, group, a) : PSInteractHas(sc, group, a);
 		const b = PSEl("button", {
 			display: "block", width: "100%", textAlign: "left", padding: "8px 10px", margin: "4px 0",
 			background: on ? "#2e7d32" : "#2c3350", color: on ? "#d7ffd9" : "#ffffff",
@@ -6058,6 +6342,7 @@ function PSUIJudgeEditor(box, sc, node) {
 		'<option value="player">' + PSEsc(PST("judgePlayer")) + "</option>",
 		'<option value="relation">' + PSEsc(PST("judgeRelation")) + "</option>",
 		'<option value="room">' + PSEsc(PST("judgeRoom")) + "</option>",
+		'<option value="count">' + PSEsc(PST("judgeCount")) + "</option>",
 	].join(""), (v) => { PSJudgeSwitchType(sc.id, node.id, v); PSUIRenderAll(); });
 	sec.appendChild(PSUIEditorRow(PST("judgeType"), typeSel));
 
@@ -6076,6 +6361,10 @@ function PSUIJudgeEditor(box, sc, node) {
 		const roomHint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px" });
 		roomHint.textContent = PST("judgeRoomHint");
 		sec.appendChild(roomHint);
+	} else if (node.judgeType === "count") {
+		const countHint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px" });
+		countHint.textContent = PST("judgeCountHint");
+		sec.appendChild(countHint);
 	} else {
 		const coinSel = PSUISelect(node.coinYesIs === "tails" ? "tails" : "heads", [
 			'<option value="heads">' + PSEsc(PST("judgeCoinHeads")) + "</option>",
@@ -6083,6 +6372,8 @@ function PSUIJudgeEditor(box, sc, node) {
 		].join(""), (v) => { PSUpdateNode(sc.id, node.id, { coinYesIs: v }); PSUIRenderAll(); });
 		sec.appendChild(PSUIEditorRow(PST("judgeCoinYesIs"), coinSel));
 	}
+
+	if (node.judgeType === "count") PSUIJudgeCountSection(sec, sc, node);
 
 	
 	const showRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
@@ -6142,6 +6433,8 @@ function PSUIJudgeEditor(box, sc, node) {
 		PSUIJudgeRelationBranches(sec, sc, node);
 	} else if (node.judgeType === "room") {
 		PSUIJudgeRoomBranches(sec, sc, node);
+	} else if (node.judgeType === "count") {
+		PSUIJudgeCountBranches(sec, sc, node);
 	} else {
 		PSUIConnectEditorRow(sec, sc, node, "yes");
 		PSUIConnectEditorRow(sec, sc, node, "no");
@@ -6336,6 +6629,204 @@ function PSUIJudgeRoomBranches(box, sc, node) {
 		sec.appendChild(PSEl("div", { fontSize: "12px", color: "#6a7290" }, PSEsc(PST("judgeBranchMax"))));
 	}
 
+	box.appendChild(sec);
+}
+
+ 
+
+function PSUIScriptPickBuild() {
+	if (PSUI.scriptPickWin || typeof document === "undefined" || !document.body) return;
+	const win = document.createElement("div");
+	win.id = "ps-scriptpickwin";
+	PSStyle(win, {
+		position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
+		width: "360px", maxHeight: "70vh", zIndex: "2147483590", background: PS_BG,
+		border: "2px solid #ffffff", borderRadius: "10px",
+		boxShadow: "0 8px 40px rgba(0,0,0,.7)", display: "none",
+		color: PS_TEXT, fontFamily: "sans-serif", fontSize: "14px", overflow: "hidden",
+	});
+	const title = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", background: "#141826", borderBottom: "1px solid " + PS_BORDER });
+	title.appendChild(PSEl("span", { color: PS_ACCENT, fontSize: "16px" }, "▶"));
+	title.appendChild(PSEl("span", { fontWeight: "700", fontSize: "14px", flex: "1" }, PSEsc(PST("countPickScriptTitle"))));
+	title.appendChild(PSSmallBtn("✕", PSUIScriptPickClose, { title: PST("closeTitle") }));
+	win.appendChild(title);
+	PSUI.scriptPickListEl = PSEl("div", { overflowY: "auto", maxHeight: "calc(70vh - 44px)", padding: "8px" });
+	win.appendChild(PSUI.scriptPickListEl);
+	document.body.appendChild(win);
+	PSUI.scriptPickWin = win;
+}
+
+function PSUIScriptPickOpen(scriptId, nodeId) {
+	PSUIScriptPickBuild();
+	if (!PSUI.scriptPickWin) return;
+	PSUI.scriptPickScriptId = scriptId;
+	PSUI.scriptPickNodeId = nodeId;
+	PSUI.scriptPickWin.style.display = "block";
+	PSUIScriptPickRender();
+}
+
+function PSUIScriptPickClose() {
+	if (PSUI.scriptPickWin) PSUI.scriptPickWin.style.display = "none";
+}
+
+function PSUIScriptPickRender() {
+	const listEl = PSUI.scriptPickListEl;
+	if (!listEl || !PSStore.state) return;
+	listEl.innerHTML = "";
+	const sc = PSFindScript(PSUI.scriptPickScriptId);
+	const node = sc ? sc.nodes.find((n) => n.id === PSUI.scriptPickNodeId) : null;
+	if (!sc || !node) return;
+	for (const s of PSStore.state.scripts) {
+		const row = PSEl("div", {
+			display: "flex", alignItems: "center", gap: "8px", padding: "8px", marginBottom: "6px",
+			borderRadius: "8px", background: node.countScriptId === s.id ? "#2c3452" : "#20263a",
+			border: "1px solid " + (node.countScriptId === s.id ? PS_ACCENT : PS_BORDER), cursor: "pointer",
+		});
+		row.appendChild(PSEl("span", { width: "18px", fontSize: "14px", color: PS_ACCENT }, "▶"));
+		const mid = PSEl("div", { flex: "1", minWidth: "0" });
+		mid.appendChild(PSEl("div", { fontSize: "13px", color: PS_TEXT, fontWeight: "700" }, PSEsc(s.name || "未命名剧本")));
+		mid.appendChild(PSEl("div", { fontSize: "11px", color: PS_TEXT_DIM }, PSEsc(s.keyword || "（无触发词）")));
+		row.appendChild(mid);
+		row.addEventListener("click", () => {
+			PSUpdateNode(sc.id, node.id, { countScriptId: s.id, countValue: 0, countNextResetAt: null });
+			PSUIScriptPickClose();
+			PSUIRenderAll();
+		});
+		listEl.appendChild(row);
+	}
+}
+
+ 
+function PSUIJudgeCountSection(box, sc, node) {
+	const sec = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#1f1830", border: "1px solid #b07f9f", marginBottom: "8px" });
+	sec.appendChild(PSEl("div", { fontWeight: "700", fontSize: "13px", color: "#f0b3ff", marginBottom: "6px" }, PSEsc(PST("judgeCountSettings"))));
+
+	const modeSel = PSUISelect(node.countMode === "interact" ? "interact" : "script", [
+		'<option value="script">' + PSEsc(PST("judgeCountScript")) + "</option>",
+		'<option value="interact">' + PSEsc(PST("judgeCountInteract")) + "</option>",
+	].join(""), (v) => { PSUpdateNode(sc.id, node.id, { countMode: v, countValue: 0, countNextResetAt: null }); PSUIRenderAll(); });
+	sec.appendChild(PSUIEditorRow(PST("judgeCountMode"), modeSel));
+
+	if (node.countMode === "interact") {
+		const pickRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+		const pickLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+		pickLab.textContent = PST("judgeCountInteractActions");
+		pickRow.appendChild(pickLab);
+		const pickBtn = PSSmallBtn("▶ " + PST("interactPick"), () => PSInteractWinOpenForNode(sc.id, node.id));
+		pickBtn.style.flex = "1";
+		pickRow.appendChild(pickBtn);
+		pickRow.appendChild(PSEl("span", {
+			padding: "6px 10px", borderRadius: "6px", background: "#10141f",
+			border: "1px solid " + PS_BORDER, fontSize: "13px", color: "#9fd8a0",
+		}, PSEsc(PST("interactGroupsN", PSCountInteractGroups(node).length, (Array.isArray(node.countInteractActions) ? node.countInteractActions.length : 0)))));
+		sec.appendChild(pickRow);
+	} else {
+		const pickRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+		const pickLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+		pickLab.textContent = PST("judgeCountScriptTarget");
+		pickRow.appendChild(pickLab);
+		const target = PSFindScript(node.countScriptId) || sc;
+		const pickBtn = PSSmallBtn(target.name || PST("countPickScriptTitle"), () => PSUIScriptPickOpen(sc.id, node.id));
+		pickBtn.style.flex = "1";
+		pickRow.appendChild(pickBtn);
+		sec.appendChild(pickRow);
+	}
+
+	const val = PSCounterValue(node);
+	const counterRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const counterLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	counterLab.textContent = PST("judgeCountValue");
+	counterRow.appendChild(counterLab);
+	counterRow.appendChild(PSEl("span", { flex: "1", padding: "6px 10px", borderRadius: "6px", background: "#10141f", border: "1px solid " + PS_BORDER, color: PS_ACCENT, fontSize: "13px" }, PSEsc(String(val))));
+	const resetBtn = PSSmallBtn(PST("judgeCountReset"), () => { PSCounterReset(node); PSUIRenderAll(); }, { bg: "#7a2c3a" });
+	counterRow.appendChild(resetBtn);
+	sec.appendChild(counterRow);
+
+	const autoRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const autoLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	autoLab.textContent = PST("judgeCountAutoReset");
+	autoRow.appendChild(autoLab);
+	const autoCb = document.createElement("input");
+	autoCb.type = "checkbox";
+	autoCb.checked = node.countAutoReset === true;
+	autoCb.addEventListener("change", () => {
+		const on = autoCb.checked;
+		const total = Math.max(1, Number(node.countResetSecs) || 86400);
+		PSUpdateNode(sc.id, node.id, { countAutoReset: on, countNextResetAt: on ? Date.now() + total * 1000 : null });
+		PSUIRenderAll();
+	});
+	autoRow.appendChild(autoCb);
+	sec.appendChild(autoRow);
+
+	if (node.countAutoReset === true) {
+		const secs = Math.max(1, Number(node.countResetSecs) || 86400);
+		const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+		const periodRow = PSEl("div", { display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px", paddingLeft: "18px" });
+		const mkInp = (val, label, max) => {
+			const inp = PSUIInput(String(val), null, { type: "number", min: "0", max: String(max || 9999), step: "1" });
+			inp.style.width = "56px";
+			periodRow.appendChild(inp);
+			periodRow.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "12px" }, PSEsc(label)));
+			return inp;
+		};
+		const hInp = mkInp(h, PST("judgeCountHours"), 9999);
+		const mInp = mkInp(m, PST("judgeCountMinutes"), 59);
+		const sInp = mkInp(s, PST("judgeCountSeconds"), 59);
+		const applyPeriod = () => {
+			const total = Math.max(1, (Number(hInp.value) || 0) * 3600 + (Number(mInp.value) || 0) * 60 + (Number(sInp.value) || 0));
+			PSUpdateNode(sc.id, node.id, { countResetSecs: total, countNextResetAt: Date.now() + total * 1000 });
+		};
+		hInp.addEventListener("change", applyPeriod);
+		mInp.addEventListener("change", applyPeriod);
+		sInp.addEventListener("change", applyPeriod);
+		sec.appendChild(periodRow);
+	}
+
+	box.appendChild(sec);
+}
+
+ 
+function PSUIJudgeCountBranches(box, sc, node) {
+	const sec = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#141a2c", border: "1px solid " + PS_BORDER, marginBottom: "8px" });
+	const branches = PSNormalizeCountBranches(node.countBranches);
+	const commit = (next) => { PSUpdateNode(sc.id, node.id, { countBranches: next }); PSUIRenderAll(); };
+	const clampNum = (v, fallback) => Math.max(0, Math.min(100000, Number(v) || fallback));
+	const setField = (bid, key, val) => commit(branches.map((b) => (b.id === bid ? Object.assign({}, b, { [key]: clampNum(val, key === "from" ? 0 : b.from) }) : b)));
+	const del = (bid) => commit(branches.filter((b) => b.id !== bid));
+
+	branches.forEach((b, i) => {
+		const row = PSEl("div", { display: "flex", gap: "6px", alignItems: "center", marginBottom: "6px" });
+		row.appendChild(PSEl("span", { width: "46px", minWidth: "46px", fontSize: "12px", color: "#f0b3ff" }, PSEsc(PST("judgePlayerBranchPh", i + 1))));
+		const fromInp = PSUIInput(String(b.from), (v) => setField(b.id, "from", v), { type: "number", min: "0", step: "1" });
+		fromInp.style.flex = "0 1 70px";
+		row.appendChild(fromInp);
+		row.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "12px" }, "~"));
+		const toInp = PSUIInput(String(b.to), (v) => setField(b.id, "to", v), { type: "number", min: "0", step: "1" });
+		toInp.style.flex = "0 1 70px";
+		row.appendChild(toInp);
+		row.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc("次")));
+		const t = b.nodeId ? PSUINodeTargetLabel(sc, b.nodeId) : null;
+		if (t) {
+			const info = PSEl("span", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, PSEsc(t));
+			info.title = t;
+			row.appendChild(info);
+			const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, node.id, "count:" + b.id); PSUIRenderAll(); });
+			row.appendChild(disc);
+		} else {
+			const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, "count:" + b.id));
+			row.appendChild(btn);
+		}
+		const delBtn = PSSmallBtn("✕", () => del(b.id), { bg: "#5a2c3a" });
+		row.appendChild(delBtn);
+		sec.appendChild(row);
+	});
+
+	if (branches.length < 5) {
+		const addBtn = PSSmallBtn(PST("judgeBranchAdd"), () => { PSJudgeAddCountBranch(sc.id, node.id); PSUIRenderAll(); });
+		sec.appendChild(addBtn);
+	} else {
+		sec.appendChild(PSEl("div", { fontSize: "12px", color: "#6a7290" }, PSEsc(PST("judgeBranchMax"))));
+	}
 	box.appendChild(sec);
 }
 
@@ -6558,6 +7049,12 @@ function PSUIConnectWinRender() {
 		const node = sc.nodes.find((n) => n.id === PSUI.connectNodeId);
 		const br = node && Array.isArray(node.roomBranches) ? node.roomBranches.find((b) => b.id === bid) : null;
 		portLabel = br ? PST("judgeRoomBranchRangeLabel", br.from, br.to) : PST("judgeRoom");
+	}
+	else if (typeof port === "string" && port.indexOf("count:") === 0) {
+		const bid = port.slice("count:".length);
+		const node = sc.nodes.find((n) => n.id === PSUI.connectNodeId);
+		const br = node && Array.isArray(node.countBranches) ? node.countBranches.find((b) => b.id === bid) : null;
+		portLabel = br ? PST("judgeCountBranchRangeLabel", br.from, br.to) : PST("judgeCount");
 	}
 	if (PSUI.connectTitleEl) PSUI.connectTitleEl.textContent = PST("connectWinTitle", portLabel);
 	const others = sc.nodes.filter((n) => n.id !== PSUI.connectNodeId);
@@ -6831,6 +7328,8 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSJudgeBranchSubtree, PSJudgeSwitchType, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSNodePreviousOf, PSNodeConnectPrevious, PSNodeDisconnectPrevious, PSMainChainOrder, PSAddNodeAfter, PSValidDiceExpr, PSNormalizeJudgeType, PSNormalizePlayerIds, PSNormalizePlayerBranches, PSJudgeAddPlayerBranch, PSPortTarget,
 		PS_RELATION_ORDER, PSRelationLabel, PSNormalizeRelationBranches, PSJudgeAddRelationBranch, PSRelationOf, PSAFCIsExtendedLover,
 		PSRoomPlayerCount, PSNormalizeRoomBranches, PSJudgeAddRoomBranch,
+		PSNormalizeCountBranches, PSJudgeAddCountBranch, PSCounterResetIfDue, PSCounterValue, PSCounterReset, PSCounterRecordScript, PSCounterRecordInteract,
+		PSInteractNode, PSCountInteractGroups, PSCountInteractGroupCount, PSCountInteractHas, PSInteractWinOpenForNode,
 		PS_ACT_ALIASES,
 		PSFire, PSRun, PSNodeNext, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
 		PSInstallHooks, PSInputClear, PSHookWhen,
