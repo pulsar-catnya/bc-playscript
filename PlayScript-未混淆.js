@@ -248,6 +248,7 @@ const PSStore = {
 							playerIds: PSNormalizePlayerIds(n.playerIds),
 							playerBranches: PSNormalizePlayerBranches(n.playerBranches),
 							relationBranches: PSNormalizeRelationBranches(n.relationBranches),
+							roomBranches: PSNormalizeRoomBranches(n.roomBranches),
 							elseId: (typeof n.elseId === "string" && n.elseId) ? n.elseId : null,
 						};
 					})
@@ -927,6 +928,7 @@ function PSAddNode(scriptId, node, atIdx) {
 		playerIds: PSNormalizePlayerIds(node && node.playerIds),
 		playerBranches: PSNormalizePlayerBranches(node && node.playerBranches),
 		relationBranches: PSNormalizeRelationBranches(node && node.relationBranches),
+		roomBranches: PSNormalizeRoomBranches(node && node.roomBranches),
 		elseId: (node && typeof node.elseId === "string" && node.elseId) ? node.elseId : null,
 	};
 	if (atIdx === undefined || atIdx === null || atIdx < 0) sc.nodes.push(n);
@@ -953,6 +955,7 @@ function PSDeleteNode(scriptId, nodeId) {
 		if (Array.isArray(n.diceBranches)) n.diceBranches = n.diceBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
 		if (Array.isArray(n.playerBranches)) n.playerBranches = n.playerBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
 		if (Array.isArray(n.relationBranches)) n.relationBranches = n.relationBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
+		if (Array.isArray(n.roomBranches)) n.roomBranches = n.roomBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
 		if (n.elseId && (n.elseId === nodeId || sub.has(n.elseId))) n.elseId = null;
 	});
 	if (PSUI.selNodeId && (PSUI.selNodeId === nodeId || sub.has(PSUI.selNodeId))) PSUI.selNodeId = null;
@@ -1063,6 +1066,7 @@ function PSUpdateNode(scriptId, nodeId, patch) {
 	if ("playerIds" in patch) n.playerIds = PSNormalizePlayerIds(patch.playerIds);
 	if ("playerBranches" in patch) n.playerBranches = PSNormalizePlayerBranches(patch.playerBranches);
 	if ("relationBranches" in patch) n.relationBranches = PSNormalizeRelationBranches(patch.relationBranches);
+	if ("roomBranches" in patch) n.roomBranches = PSNormalizeRoomBranches(patch.roomBranches);
 	if ("elseId" in patch) n.elseId = (patch.elseId && typeof patch.elseId === "string") ? patch.elseId : null;
 	PSStore.requestSave();
 	return true;
@@ -1462,6 +1466,7 @@ function PSNormalizeJudgeType(v) {
 	if (v === "dice") return "dice";
 	if (v === "player") return "player";
 	if (v === "relation") return "relation";
+	if (v === "room") return "room";
 	return "coin";
 }
 
@@ -1508,6 +1513,11 @@ function PSPortTarget(node, port) {
 	const rm = /^relation:(.+)$/.exec(String(port));
 	if (rm && Array.isArray(node.relationBranches)) {
 		const b = node.relationBranches.find((x) => x.id === rm[1]);
+		return (b && b.nodeId) ? b.nodeId : null;
+	}
+	const om = /^room:(.+)$/.exec(String(port));
+	if (om && Array.isArray(node.roomBranches)) {
+		const b = node.roomBranches.find((x) => x.id === om[1]);
 		return (b && b.nodeId) ? b.nodeId : null;
 	}
 	return null;
@@ -1596,6 +1606,13 @@ function PSJudgeRoll(node, targetNum) {
 			const br = branches.find((b) => b.rel === rel) || branches.find((b) => b.rel === "none");
 			return { yes: false, label: PSRelationLabel(rel), targetId: br ? br.nodeId : null };
 		}
+		if (node && node.judgeType === "room") {
+			const count = PSRoomPlayerCount();
+			const branches = PSNormalizeRoomBranches(node.roomBranches);
+			const sorted = branches.slice().sort((a, b) => b.min - a.min);
+			const br = sorted.find((b) => count >= b.min);
+			return { yes: false, label: count + "人", targetId: br ? br.nodeId : null };
+		}
 		if (node && node.judgeType === "dice") {
 			const m = /^(\d{1,3})[dD](\d{1,4})$/.exec(String(node.diceExpr || "1d6"));
 			const n = m ? Math.min(Number(m[1]), 100) : 1;
@@ -1635,6 +1652,33 @@ function PSNormalizeDiceBranches(arr) {
 		});
 	}
 	return out.slice(0, 5);
+}
+
+ 
+function PSRoomPlayerCount() {
+	try {
+		if (typeof ChatRoomCharacter !== "undefined" && Array.isArray(ChatRoomCharacter)) return ChatRoomCharacter.length;
+		if (typeof ChatRoomData !== "undefined" && ChatRoomData && Array.isArray(ChatRoomData.Character)) return ChatRoomData.Character.length;
+		if (typeof Character !== "undefined" && Array.isArray(Character)) return Character.length;
+	} catch (e) {   }
+	return 0;
+}
+
+ 
+function PSNormalizeRoomBranches(arr) {
+	if (!Array.isArray(arr)) return [];
+	const out = [];
+	for (const b of arr) {
+		if (!b || typeof b !== "object") continue;
+		const min = Math.max(1, Math.min(100000, Number(b.min) || 1));
+		out.push({
+			id: typeof b.id === "string" ? b.id : PSUid("rmb"),
+			min,
+			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
+		});
+		if (out.length >= 5) break;
+	}
+	return out;
 }
 
  
@@ -1691,6 +1735,23 @@ function PSJudgeAddRelationBranch(scriptId, nodeId) {
 }
 
  
+function PSJudgeAddRoomBranch(scriptId, nodeId) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return null;
+	const node = sc.nodes.find((n) => n.id === nodeId);
+	if (!node || node.type !== "judge") return null;
+	const branches = PSNormalizeRoomBranches(node.roomBranches);
+	if (branches.length >= 5) { PSToast(PST("judgeBranchMax")); return null; }
+	const maxMin = branches.reduce((m, b) => Math.max(m, b.min), 0);
+	const n = PSAddNode(scriptId, { type: "chat", text: PST("judgeBranchPh", branches.length + 1), delay: 0, enabled: true });
+	if (!n) return null;
+	const branch = { id: PSUid("rmb"), min: maxMin ? maxMin + 5 : 1, nodeId: n.id };
+	branches.push(branch);
+	PSUpdateNode(scriptId, nodeId, { roomBranches: branches });
+	return branch;
+}
+
+ 
 function PSJudgeBranchSubtree(sc, judge) {
 	const byId = new Map(sc.nodes.map((n) => [n.id, n]));
 	const out = new Set();
@@ -1701,6 +1762,7 @@ function PSJudgeBranchSubtree(sc, judge) {
 	if (Array.isArray(judge.diceBranches)) judge.diceBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 	if (Array.isArray(judge.playerBranches)) judge.playerBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 	if (Array.isArray(judge.relationBranches)) judge.relationBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
+	if (Array.isArray(judge.roomBranches)) judge.roomBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 	if (judge.elseId) push(judge.elseId);
 	while (stack.length) {
 		const id = stack.pop();
@@ -1715,6 +1777,7 @@ function PSJudgeBranchSubtree(sc, judge) {
 			if (Array.isArray(n.diceBranches)) n.diceBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 			if (Array.isArray(n.playerBranches)) n.playerBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 			if (Array.isArray(n.relationBranches)) n.relationBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
+			if (Array.isArray(n.roomBranches)) n.roomBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 			if (n.elseId) push(n.elseId);
 		}
 	}
@@ -1739,6 +1802,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 			if (Array.isArray(n.diceBranches)) n.diceBranches = n.diceBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
 			if (Array.isArray(n.playerBranches)) n.playerBranches = n.playerBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
 			if (Array.isArray(n.relationBranches)) n.relationBranches = n.relationBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
+			if (Array.isArray(n.roomBranches)) n.roomBranches = n.roomBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
 			if (n.elseId && sub.has(n.elseId)) n.elseId = null;
 		});
 		if (PSUI.selNodeId && sub.has(PSUI.selNodeId)) PSUI.selNodeId = nodeId;
@@ -1749,7 +1813,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const a = mk(PST("judgeBranchPh", 1));
 		const b = mk(PST("judgeBranchPh", 2));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, elseId: null, playerBranches: [], relationBranches: [],
+			judgeType: newType, yesId: null, noId: null, elseId: null, playerBranches: [], relationBranches: [], roomBranches: [],
 			diceBranches: [
 				{ id: PSUid("db"), from: 1, to: 10, nodeId: a ? a.id : null },
 				{ id: PSUid("db"), from: 11, to: 20, nodeId: b ? b.id : null },
@@ -1760,7 +1824,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const b = mk(PST("judgeBranchPh", 2));
 		const e = mk(PST("judgeNoPh"));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, diceBranches: [], relationBranches: [], elseId: e ? e.id : null,
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], relationBranches: [], roomBranches: [], elseId: e ? e.id : null,
 			playerBranches: [
 				{ id: PSUid("pb"), ids: [], nodeId: a ? a.id : null },
 				{ id: PSUid("pb"), ids: [], nodeId: b ? b.id : null },
@@ -1770,10 +1834,20 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const a = mk(PST("judgeBranchPh", 1));
 		const b = mk(PST("judgeBranchPh", 2));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], elseId: null,
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], roomBranches: [], elseId: null,
 			relationBranches: [
 				{ id: PSUid("rb"), rel: "owner", nodeId: a ? a.id : null },
 				{ id: PSUid("rb"), rel: "none", nodeId: b ? b.id : null },
+			],
+		});
+	} else if (newType === "room") {
+		const a = mk(PST("judgeBranchPh", 1));
+		const b = mk(PST("judgeBranchPh", 2));
+		PSUpdateNode(sc.id, nodeId, {
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], elseId: null,
+			roomBranches: [
+				{ id: PSUid("rmb"), min: 1, nodeId: a ? a.id : null },
+				{ id: PSUid("rmb"), min: 5, nodeId: b ? b.id : null },
 			],
 		});
 	} else {
@@ -1781,7 +1855,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const b = mk(PST("judgeNoPh"));
 		PSUpdateNode(sc.id, nodeId, {
 			judgeType: newType, yesId: a ? a.id : null, noId: b ? b.id : null,
-			diceBranches: [], playerBranches: [], relationBranches: [], elseId: null,
+			diceBranches: [], playerBranches: [], relationBranches: [], roomBranches: [], elseId: null,
 		});
 	}
 	return true;
@@ -1798,6 +1872,7 @@ function PSNodeEdges(nodes) {
 			if (Array.isArray(n.diceBranches)) n.diceBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
 			if (Array.isArray(n.playerBranches)) n.playerBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
 			if (Array.isArray(n.relationBranches)) n.relationBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
+			if (Array.isArray(n.roomBranches)) n.roomBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
 			if (n.elseId && byId.has(n.elseId)) edges.get(n.id).push(n.elseId);
 		} else if (n.nextId && byId.has(n.nextId)) {
 			edges.get(n.id).push(n.nextId);
@@ -1843,6 +1918,7 @@ function PSBranchNodeSet(nodes) {
 			if (Array.isArray(n.diceBranches)) n.diceBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
 			if (Array.isArray(n.playerBranches)) n.playerBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
 			if (Array.isArray(n.relationBranches)) n.relationBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
+			if (Array.isArray(n.roomBranches)) n.roomBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
 			if (n.elseId) walk(n.elseId);
 		}
 	});
@@ -1874,6 +1950,11 @@ function PSNodeConnect(scriptId, nodeId, port, targetId) {
 		const branches = PSNormalizeRelationBranches(node.relationBranches);
 		if (!branches.some((b) => b.id === bid)) return { ok: false, why: "bad" };
 		patch = { relationBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: targetId }) : b) };
+	} else if (typeof port === "string" && port.indexOf("room:") === 0) {
+		const bid = port.slice("room:".length);
+		const branches = PSNormalizeRoomBranches(node.roomBranches);
+		if (!branches.some((b) => b.id === bid)) return { ok: false, why: "bad" };
+		patch = { roomBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: targetId }) : b) };
 	} else {
 		patch = { nextId: targetId, stop: false };
 	}
@@ -1899,6 +1980,10 @@ function PSNodeDisconnect(scriptId, nodeId, port) {
 		const bid = port.slice("relation:".length);
 		const branches = PSNormalizeRelationBranches(node.relationBranches);
 		patch = { relationBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: null }) : b) };
+	} else if (typeof port === "string" && port.indexOf("room:") === 0) {
+		const bid = port.slice("room:".length);
+		const branches = PSNormalizeRoomBranches(node.roomBranches);
+		patch = { roomBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: null }) : b) };
 	} else {
 		patch = { nextId: null, stop: true };
 	}
@@ -2541,6 +2626,7 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			playerIds: Array.isArray(n.playerIds) ? n.playerIds.slice() : [],
 			playerBranches: Array.isArray(n.playerBranches) ? n.playerBranches.map((b) => ({ id: b.id, ids: (Array.isArray(b.ids) ? b.ids.slice() : []), nodeId: b.nodeId })) : [],
 			relationBranches: Array.isArray(n.relationBranches) ? n.relationBranches.map((b) => ({ id: b.id, rel: b.rel, nodeId: b.nodeId })) : [],
+			roomBranches: Array.isArray(n.roomBranches) ? n.roomBranches.map((b) => ({ id: b.id, min: b.min, nodeId: b.nodeId })) : [],
 			elseId: (typeof n.elseId === "string" && n.elseId) ? n.elseId : null,
 		})),
 		idx: -1,
@@ -3336,6 +3422,10 @@ const PSText = {
 		judgePlayerBranchPh: "分支{0}",
 		judgeRelation: "玩家关系判定",
 		judgeRelationHint: "判定对方与我的关系，按 主人→恋人→白名单→好友→无关系 的固定顺序走对应分支",
+		judgeRoom: "房间人数判定",
+		judgeRoomHint: "判定当前房间人数，走满足「人数 ≥ 下限」里下限最大的分支。例如：1 = 少于5人、5 = 5人以上、10 = 10人以上；最多 5 个分支",
+		judgeRoomMinSuffix: "人及以上",
+		judgeRoomBranchLabel: "≥{0}人",
 		relOwner: "主人",
 		relLover: "恋人",
 		relWhite: "白名单",
@@ -3595,6 +3685,10 @@ const PSText = {
 		judgePlayerBranchPh: "Branch {0}",
 		judgeRelation: "Relationship",
 		judgeRelationHint: "Judge the other player's relationship to you, routed in fixed order: Owner → Lover → Whitelist → Friend → No relationship",
+		judgeRoom: "Room population",
+		judgeRoomHint: "Judge the current room population, routed to the branch with the largest lower bound that is ≤ the current count. Example: 1 = fewer than 5, 5 = 5 or more, 10 = 10 or more; up to 5 branches",
+		judgeRoomMinSuffix: "or more",
+		judgeRoomBranchLabel: "≥{0}",
 		relOwner: "Owner",
 		relLover: "Lover",
 		relWhite: "Whitelist",
@@ -4444,6 +4538,9 @@ function PSUIFlowBuild() {
 			} else if (n.judgeType === "relation") {
 				const rbs = Array.isArray(n.relationBranches) ? n.relationBranches : [];
 				branchDefs = rbs.map((b) => ({ label: PSRelationLabel(b.rel), nodeId: b.nodeId, color: "#2c7a9f" }));
+			} else if (n.judgeType === "room") {
+				const rbs = Array.isArray(n.roomBranches) ? n.roomBranches : [];
+				branchDefs = rbs.map((b) => ({ label: PST("judgeRoomBranchLabel", b.min), nodeId: b.nodeId, color: "#3f8f86" }));
 			} else {
 				branchDefs = [
 					{ label: PST("connectYes"), nodeId: n.yesId, color: "#2c7a70" },
@@ -4540,6 +4637,11 @@ function PSUIJudgePreview(n) {
 		const rbs = PSNormalizeRelationBranches(n.relationBranches);
 		const parts = rbs.map((b) => PSRelationLabel(b.rel));
 		return "关系：" + (parts.length ? parts.join("、") : "（未设置分支）");
+	}
+	if (n && n.judgeType === "room") {
+		const rbs = PSNormalizeRoomBranches(n.roomBranches);
+		const parts = rbs.map((b) => PST("judgeRoomBranchLabel", b.min));
+		return "房间人数：" + (parts.length ? parts.join("、") : "（未设置分支）");
 	}
 	if (n && n.judgeType === "player") {
 		const pbs = PSNormalizePlayerBranches(n.playerBranches);
@@ -5953,6 +6055,7 @@ function PSUIJudgeEditor(box, sc, node) {
 		'<option value="dice">' + PSEsc(PST("judgeDice")) + "</option>",
 		'<option value="player">' + PSEsc(PST("judgePlayer")) + "</option>",
 		'<option value="relation">' + PSEsc(PST("judgeRelation")) + "</option>",
+		'<option value="room">' + PSEsc(PST("judgeRoom")) + "</option>",
 	].join(""), (v) => { PSJudgeSwitchType(sc.id, node.id, v); PSUIRenderAll(); });
 	sec.appendChild(PSUIEditorRow(PST("judgeType"), typeSel));
 
@@ -5967,6 +6070,10 @@ function PSUIJudgeEditor(box, sc, node) {
 		const relHint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px" });
 		relHint.textContent = PST("judgeRelationHint");
 		sec.appendChild(relHint);
+	} else if (node.judgeType === "room") {
+		const roomHint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px" });
+		roomHint.textContent = PST("judgeRoomHint");
+		sec.appendChild(roomHint);
 	} else {
 		const coinSel = PSUISelect(node.coinYesIs === "tails" ? "tails" : "heads", [
 			'<option value="heads">' + PSEsc(PST("judgeCoinHeads")) + "</option>",
@@ -6031,6 +6138,8 @@ function PSUIJudgeEditor(box, sc, node) {
 		PSUIJudgePlayerBranches(sec, sc, node);
 	} else if (node.judgeType === "relation") {
 		PSUIJudgeRelationBranches(sec, sc, node);
+	} else if (node.judgeType === "room") {
+		PSUIJudgeRoomBranches(sec, sc, node);
 	} else {
 		PSUIConnectEditorRow(sec, sc, node, "yes");
 		PSUIConnectEditorRow(sec, sc, node, "no");
@@ -6173,6 +6282,48 @@ function PSUIJudgeRelationBranches(box, sc, node) {
 
 	if (branches.length < 5) {
 		const addBtn = PSSmallBtn(PST("judgeBranchAdd"), () => { PSJudgeAddRelationBranch(sc.id, node.id); PSUIRenderAll(); });
+		sec.appendChild(addBtn);
+	} else {
+		sec.appendChild(PSEl("div", { fontSize: "12px", color: "#6a7290" }, PSEsc(PST("judgeBranchMax"))));
+	}
+
+	box.appendChild(sec);
+}
+
+ 
+function PSUIJudgeRoomBranches(box, sc, node) {
+	const sec = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#141a2c", border: "1px solid " + PS_BORDER, marginBottom: "8px" });
+
+	const branches = PSNormalizeRoomBranches(node.roomBranches);
+	const commit = (next) => { PSUpdateNode(sc.id, node.id, { roomBranches: next }); PSUIRenderAll(); };
+	const setMin = (bid, val) => commit(branches.map((b) => (b.id === bid ? Object.assign({}, b, { min: Math.max(1, Math.min(100000, Number(val) || 1)) }) : b)));
+	const del = (bid) => commit(branches.filter((b) => b.id !== bid));
+
+	branches.forEach((b, i) => {
+		const row = PSEl("div", { display: "flex", gap: "6px", alignItems: "center", marginBottom: "6px" });
+		row.appendChild(PSEl("span", { width: "46px", minWidth: "46px", fontSize: "12px", color: "#f0b3ff" }, PSEsc(PST("judgePlayerBranchPh", i + 1))));
+		const minInp = PSUIInput(String(b.min), (v) => setMin(b.id, v), { type: "number", min: "1", step: "1" });
+		minInp.style.flex = "0 1 70px";
+		row.appendChild(minInp);
+		row.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc(PST("judgeRoomMinSuffix"))));
+		const t = b.nodeId ? PSUINodeTargetLabel(sc, b.nodeId) : null;
+		if (t) {
+			const info = PSEl("span", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, PSEsc(t));
+			info.title = t;
+			row.appendChild(info);
+			const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, node.id, "room:" + b.id); PSUIRenderAll(); });
+			row.appendChild(disc);
+		} else {
+			const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, "room:" + b.id));
+			row.appendChild(btn);
+		}
+		const delBtn = PSSmallBtn("✕", () => del(b.id), { bg: "#5a2c3a" });
+		row.appendChild(delBtn);
+		sec.appendChild(row);
+	});
+
+	if (branches.length < 5) {
+		const addBtn = PSSmallBtn(PST("judgeBranchAdd"), () => { PSJudgeAddRoomBranch(sc.id, node.id); PSUIRenderAll(); });
 		sec.appendChild(addBtn);
 	} else {
 		sec.appendChild(PSEl("div", { fontSize: "12px", color: "#6a7290" }, PSEsc(PST("judgeBranchMax"))));
@@ -6394,6 +6545,12 @@ function PSUIConnectWinRender() {
 		const node = sc.nodes.find((n) => n.id === PSUI.connectNodeId);
 		const br = node && Array.isArray(node.relationBranches) ? node.relationBranches.find((b) => b.id === bid) : null;
 		portLabel = br ? PSRelationLabel(br.rel) : PST("judgeRelation");
+	}
+	else if (typeof port === "string" && port.indexOf("room:") === 0) {
+		const bid = port.slice("room:".length);
+		const node = sc.nodes.find((n) => n.id === PSUI.connectNodeId);
+		const br = node && Array.isArray(node.roomBranches) ? node.roomBranches.find((b) => b.id === bid) : null;
+		portLabel = br ? PST("judgeRoomBranchLabel", br.min) : PST("judgeRoom");
 	}
 	if (PSUI.connectTitleEl) PSUI.connectTitleEl.textContent = PST("connectWinTitle", portLabel);
 	const others = sc.nodes.filter((n) => n.id !== PSUI.connectNodeId);
@@ -6666,6 +6823,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_TIME_TOKEN, PSTimeHMToMin, PSTimeRuleMinutes, PSTimeRuleMatch, PSTimeRuleText, PSNormalizeTimeRules, PSNormalizeTimeTriggerRules, PSTimeTriggerScan,
 		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSJudgeBranchSubtree, PSJudgeSwitchType, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSNodePreviousOf, PSNodeConnectPrevious, PSNodeDisconnectPrevious, PSMainChainOrder, PSAddNodeAfter, PSValidDiceExpr, PSNormalizeJudgeType, PSNormalizePlayerIds, PSNormalizePlayerBranches, PSJudgeAddPlayerBranch, PSPortTarget,
 		PS_RELATION_ORDER, PSRelationLabel, PSNormalizeRelationBranches, PSJudgeAddRelationBranch, PSRelationOf, PSAFCIsExtendedLover,
+		PSRoomPlayerCount, PSNormalizeRoomBranches, PSJudgeAddRoomBranch,
 		PS_ACT_ALIASES,
 		PSFire, PSRun, PSNodeNext, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
 		PSInstallHooks, PSInputClear, PSHookWhen,
