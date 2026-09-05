@@ -257,6 +257,12 @@ const PSStore = {
 							countResetSecs: PSClamp(Number(n.countResetSecs) || 86400, 1, 315360000),
 							countNextResetAt: (typeof n.countNextResetAt === "number") ? n.countNextResetAt : null,
 							countBranches: PSNormalizeCountBranches(n.countBranches),
+							lotteryBalls: PSNormalizeLotteryBalls(n.lotteryBalls),
+							lotteryEmptyId: (typeof n.lotteryEmptyId === "string" && n.lotteryEmptyId) ? n.lotteryEmptyId : null,
+							lotteryDrawn: PSNormalizeLotteryDrawn(n.lotteryDrawn),
+							lotteryAutoReset: n.lotteryAutoReset === true,
+							lotteryResetSecs: PSClamp(Number(n.lotteryResetSecs) || 86400, 1, 315360000),
+							lotteryNextResetAt: (typeof n.lotteryNextResetAt === "number") ? n.lotteryNextResetAt : null,
 							elseId: (typeof n.elseId === "string" && n.elseId) ? n.elseId : null,
 						};
 					})
@@ -945,6 +951,12 @@ function PSAddNode(scriptId, node, atIdx) {
 		countResetSecs: PSClamp(Number((node && node.countResetSecs) || 86400), 1, 315360000),
 		countNextResetAt: (node && typeof node.countNextResetAt === "number") ? node.countNextResetAt : null,
 		countBranches: PSNormalizeCountBranches(node && node.countBranches),
+		lotteryBalls: PSNormalizeLotteryBalls(node && node.lotteryBalls),
+		lotteryEmptyId: (node && typeof node.lotteryEmptyId === "string" && node.lotteryEmptyId) ? node.lotteryEmptyId : null,
+		lotteryDrawn: PSNormalizeLotteryDrawn(node && node.lotteryDrawn),
+		lotteryAutoReset: !!(node && node.lotteryAutoReset),
+		lotteryResetSecs: PSClamp(Number((node && node.lotteryResetSecs) || 86400), 1, 315360000),
+		lotteryNextResetAt: (node && typeof node.lotteryNextResetAt === "number") ? node.lotteryNextResetAt : null,
 		elseId: (node && typeof node.elseId === "string" && node.elseId) ? node.elseId : null,
 	};
 	if (atIdx === undefined || atIdx === null || atIdx < 0) sc.nodes.push(n);
@@ -973,6 +985,8 @@ function PSDeleteNode(scriptId, nodeId) {
 		if (Array.isArray(n.relationBranches)) n.relationBranches = n.relationBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
 		if (Array.isArray(n.roomBranches)) n.roomBranches = n.roomBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
 		if (Array.isArray(n.countBranches)) n.countBranches = n.countBranches.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
+		if (Array.isArray(n.lotteryBalls)) n.lotteryBalls = n.lotteryBalls.filter((b) => b && b.nodeId && b.nodeId !== nodeId && !sub.has(b.nodeId));
+		if (n.lotteryEmptyId && (n.lotteryEmptyId === nodeId || sub.has(n.lotteryEmptyId))) n.lotteryEmptyId = null;
 		if (n.elseId && (n.elseId === nodeId || sub.has(n.elseId))) n.elseId = null;
 	});
 	if (PSUI.selNodeId && (PSUI.selNodeId === nodeId || sub.has(PSUI.selNodeId))) PSUI.selNodeId = null;
@@ -1092,6 +1106,12 @@ function PSUpdateNode(scriptId, nodeId, patch) {
 	if ("countResetSecs" in patch) n.countResetSecs = PSClamp(Number(patch.countResetSecs) || 86400, 1, 315360000);
 	if ("countNextResetAt" in patch) n.countNextResetAt = (typeof patch.countNextResetAt === "number") ? patch.countNextResetAt : null;
 	if ("countBranches" in patch) n.countBranches = PSNormalizeCountBranches(patch.countBranches);
+	if ("lotteryBalls" in patch) n.lotteryBalls = PSNormalizeLotteryBalls(patch.lotteryBalls);
+	if ("lotteryEmptyId" in patch) n.lotteryEmptyId = (patch.lotteryEmptyId && typeof patch.lotteryEmptyId === "string") ? patch.lotteryEmptyId : null;
+	if ("lotteryDrawn" in patch) n.lotteryDrawn = PSNormalizeLotteryDrawn(patch.lotteryDrawn);
+	if ("lotteryAutoReset" in patch) n.lotteryAutoReset = patch.lotteryAutoReset !== false;
+	if ("lotteryResetSecs" in patch) n.lotteryResetSecs = PSClamp(Number(patch.lotteryResetSecs) || 86400, 1, 315360000);
+	if ("lotteryNextResetAt" in patch) n.lotteryNextResetAt = (typeof patch.lotteryNextResetAt === "number") ? patch.lotteryNextResetAt : null;
 	if ("elseId" in patch) n.elseId = (patch.elseId && typeof patch.elseId === "string") ? patch.elseId : null;
 	PSStore.requestSave();
 	return true;
@@ -1493,6 +1513,7 @@ function PSNormalizeJudgeType(v) {
 	if (v === "relation") return "relation";
 	if (v === "room") return "room";
 	if (v === "count") return "count";
+	if (v === "lottery") return "lottery";
 	return "coin";
 }
 
@@ -1551,6 +1572,12 @@ function PSPortTarget(node, port) {
 		const b = node.countBranches.find((x) => x.id === cm[1]);
 		return (b && b.nodeId) ? b.nodeId : null;
 	}
+	const lm = /^lottery:(.+)$/.exec(String(port));
+	if (lm && Array.isArray(node.lotteryBalls)) {
+		const b = node.lotteryBalls.find((x) => x.id === lm[1]);
+		return (b && b.nodeId) ? b.nodeId : null;
+	}
+	if (port === "lotteryEmpty") return node.lotteryEmptyId || null;
 	return null;
 }
 
@@ -1612,7 +1639,7 @@ function PSRelationOf(C) {
 }
 
  
-function PSJudgeRoll(node, targetNum) {
+function PSJudgeRoll(node, targetNum, scriptId) {
 	try {
 		if (node && node.judgeType === "player") {
 			const me = (typeof Player !== "undefined" && Player && Number.isInteger(Player.MemberNumber)) ? Player.MemberNumber : null;
@@ -1648,6 +1675,12 @@ function PSJudgeRoll(node, targetNum) {
 			const branches = PSNormalizeCountBranches(node.countBranches);
 			const br = branches.find((b) => count >= b.from && count <= b.to);
 			return { yes: false, label: count + "次", targetId: br ? br.nodeId : null };
+		}
+		if (node && node.judgeType === "lottery") {
+			const drawn = PSLotteryDraw(scriptId, node.id);
+			if (!drawn) return { yes: false, label: PST("lotteryEmptyLabel"), targetId: node.lotteryEmptyId || null };
+			const branch = PSNormalizeLotteryBalls(node.lotteryBalls).find((b) => b.color === drawn);
+			return { yes: false, label: PSLotteryColorLabel(drawn), targetId: branch ? branch.nodeId : null };
 		}
 		if (node && node.judgeType === "dice") {
 			const m = /^(\d{1,3})[dD](\d{1,4})$/.exec(String(node.diceExpr || "1d6"));
@@ -1824,6 +1857,130 @@ function PSCounterRecordInteract(group, actName) {
 }
 
  
+
+const PS_LOTTERY_COLORS = ["red", "yellow", "blue", "green", "white"];
+const PS_LOTTERY_COLOR_MAP = { red: "#e74c3c", yellow: "#f1c40f", blue: "#3498db", green: "#2ecc71", white: "#ecf0f1" };
+
+function PSLotteryColorLabel(color) {
+	return PST("lotteryColor_" + color) || color;
+}
+
+ 
+function PSNormalizeLotteryBalls(arr) {
+	if (!Array.isArray(arr)) return [];
+	const out = [];
+	const seen = new Set();
+	for (const b of arr) {
+		if (!b || typeof b !== "object") continue;
+		const color = PS_LOTTERY_COLORS.includes(b.color) ? b.color : null;
+		if (!color || seen.has(color)) continue;
+		seen.add(color);
+		out.push({
+			id: typeof b.id === "string" ? b.id : PSUid("lb"),
+			color,
+			count: Math.max(0, Math.min(100000, Number(b.count) || 0)),
+			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
+		});
+		if (out.length >= 5) break;
+	}
+	return out;
+}
+
+function PSNormalizeLotteryDrawn(v) {
+	const out = {};
+	if (v && typeof v === "object") {
+		for (const c of PS_LOTTERY_COLORS) {
+			out[c] = Math.max(0, Number(v[c]) || 0);
+		}
+	}
+	return out;
+}
+
+ 
+function PSLotteryResetIfDue(node, now) {
+	if (!node || node.lotteryAutoReset !== true || !(Number(node.lotteryResetSecs) > 0)) return false;
+	const t = now || Date.now();
+	if (node.lotteryNextResetAt == null || node.lotteryNextResetAt <= t) {
+		node.lotteryDrawn = {};
+		node.lotteryNextResetAt = t + Number(node.lotteryResetSecs) * 1000;
+		return true;
+	}
+	return false;
+}
+
+function PSLotteryReset(node) {
+	if (!node) return;
+	node.lotteryDrawn = {};
+	if (node.lotteryAutoReset === true && Number(node.lotteryResetSecs) > 0) {
+		node.lotteryNextResetAt = Date.now() + Number(node.lotteryResetSecs) * 1000;
+	} else {
+		node.lotteryNextResetAt = null;
+	}
+	PSStore.requestSave();
+}
+
+function PSLotteryDrawnOf(node, color) {
+	return (node && node.lotteryDrawn && typeof node.lotteryDrawn[color] === "number") ? node.lotteryDrawn[color] : 0;
+}
+
+function PSLotteryTotalOf(node) {
+	return (Array.isArray(node && node.lotteryBalls) ? node.lotteryBalls : []).reduce((s, b) => s + (Number(b.count) || 0), 0);
+}
+
+function PSLotteryRemainingOf(node, color) {
+	const ball = node && Array.isArray(node.lotteryBalls) ? node.lotteryBalls.find((b) => b.color === color) : null;
+	return Math.max(0, (ball ? Number(ball.count) || 0 : 0) - PSLotteryDrawnOf(node, color));
+}
+
+function PSLotteryRemainingTotal(node) {
+	return PS_LOTTERY_COLORS.reduce((s, c) => s + PSLotteryRemainingOf(node, c), 0);
+}
+
+ 
+function PSLotteryDraw(scriptId, nodeId) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return null;
+	const node = sc.nodes.find((n) => n.id === nodeId);
+	if (!node) return null;
+	if (PSLotteryResetIfDue(node)) node.lotteryDrawn = {};
+	const entries = [];
+	for (const b of PSNormalizeLotteryBalls(node.lotteryBalls)) {
+		const rem = PSLotteryRemainingOf(node, b.color);
+		if (rem > 0) entries.push({ color: b.color, rem });
+	}
+	if (!entries.length) return null;
+	let total = entries.reduce((s, e) => s + e.rem, 0);
+	let r = Math.floor(Math.random() * total);
+	for (const e of entries) {
+		if (r < e.rem) {
+			node.lotteryDrawn = node.lotteryDrawn || {};
+			node.lotteryDrawn[e.color] = PSLotteryDrawnOf(node, e.color) + 1;
+			PSStore.requestSave();
+			return e.color;
+		}
+		r -= e.rem;
+	}
+	return null;
+}
+
+ 
+function PSJudgeAddLotteryBranch(scriptId, nodeId) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return null;
+	const node = sc.nodes.find((n) => n.id === nodeId);
+	if (!node || node.type !== "judge") return null;
+	const balls = PSNormalizeLotteryBalls(node.lotteryBalls);
+	if (balls.length >= PS_LOTTERY_COLORS.length) { PSToast(PST("judgeBranchMax")); return null; }
+	const used = new Set(balls.map((b) => b.color));
+	const color = PS_LOTTERY_COLORS.find((c) => !used.has(c));
+	if (!color) return null;
+	const n = PSAddNode(scriptId, { type: "chat", text: PST("judgeBranchPh", balls.length + 1), delay: 0, enabled: true });
+	if (!n) return null;
+	const branch = { id: PSUid("lb"), color, count: 1, nodeId: n.id };
+	balls.push(branch);
+	PSUpdateNode(scriptId, nodeId, { lotteryBalls: balls });
+	return branch;
+}
 function PSJudgeAddDiceBranch(scriptId, nodeId) {
 	const sc = PSFindScript(scriptId);
 	if (!sc) return null;
@@ -1908,6 +2065,8 @@ function PSJudgeBranchSubtree(sc, judge) {
 	if (Array.isArray(judge.relationBranches)) judge.relationBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 	if (Array.isArray(judge.roomBranches)) judge.roomBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 	if (Array.isArray(judge.countBranches)) judge.countBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
+	if (Array.isArray(judge.lotteryBalls)) judge.lotteryBalls.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
+	if (judge.lotteryEmptyId) push(judge.lotteryEmptyId);
 	if (judge.elseId) push(judge.elseId);
 	while (stack.length) {
 		const id = stack.pop();
@@ -1924,6 +2083,8 @@ function PSJudgeBranchSubtree(sc, judge) {
 			if (Array.isArray(n.relationBranches)) n.relationBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 			if (Array.isArray(n.roomBranches)) n.roomBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
 			if (Array.isArray(n.countBranches)) n.countBranches.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
+			if (Array.isArray(n.lotteryBalls)) n.lotteryBalls.forEach((b) => { if (b && b.nodeId) push(b.nodeId); });
+			if (n.lotteryEmptyId) push(n.lotteryEmptyId);
 			if (n.elseId) push(n.elseId);
 		}
 	}
@@ -1950,6 +2111,8 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 			if (Array.isArray(n.relationBranches)) n.relationBranches = n.relationBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
 			if (Array.isArray(n.roomBranches)) n.roomBranches = n.roomBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
 			if (Array.isArray(n.countBranches)) n.countBranches = n.countBranches.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
+			if (Array.isArray(n.lotteryBalls)) n.lotteryBalls = n.lotteryBalls.filter((b) => b && b.nodeId && !sub.has(b.nodeId));
+			if (n.lotteryEmptyId && sub.has(n.lotteryEmptyId)) n.lotteryEmptyId = null;
 			if (n.elseId && sub.has(n.elseId)) n.elseId = null;
 		});
 		if (PSUI.selNodeId && sub.has(PSUI.selNodeId)) PSUI.selNodeId = nodeId;
@@ -1960,7 +2123,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const a = mk(PST("judgeBranchPh", 1));
 		const b = mk(PST("judgeBranchPh", 2));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, elseId: null, playerBranches: [], relationBranches: [], roomBranches: [], countBranches: [],
+			judgeType: newType, yesId: null, noId: null, elseId: null, playerBranches: [], relationBranches: [], roomBranches: [], countBranches: [], lotteryBalls: [], lotteryEmptyId: null,
 			diceBranches: [
 				{ id: PSUid("db"), from: 1, to: 10, nodeId: a ? a.id : null },
 				{ id: PSUid("db"), from: 11, to: 20, nodeId: b ? b.id : null },
@@ -1971,7 +2134,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const b = mk(PST("judgeBranchPh", 2));
 		const e = mk(PST("judgeNoPh"));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, diceBranches: [], relationBranches: [], roomBranches: [], countBranches: [], elseId: e ? e.id : null,
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], relationBranches: [], roomBranches: [], countBranches: [], lotteryBalls: [], lotteryEmptyId: null, elseId: e ? e.id : null,
 			playerBranches: [
 				{ id: PSUid("pb"), ids: [], nodeId: a ? a.id : null },
 				{ id: PSUid("pb"), ids: [], nodeId: b ? b.id : null },
@@ -1981,7 +2144,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const a = mk(PST("judgeBranchPh", 1));
 		const b = mk(PST("judgeBranchPh", 2));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], roomBranches: [], countBranches: [], elseId: null,
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], roomBranches: [], countBranches: [], lotteryBalls: [], lotteryEmptyId: null, elseId: null,
 			relationBranches: [
 				{ id: PSUid("rb"), rel: "owner", nodeId: a ? a.id : null },
 				{ id: PSUid("rb"), rel: "none", nodeId: b ? b.id : null },
@@ -1991,7 +2154,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const a = mk(PST("judgeBranchPh", 1));
 		const b = mk(PST("judgeBranchPh", 2));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], countBranches: [], elseId: null,
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], countBranches: [], lotteryBalls: [], lotteryEmptyId: null, elseId: null,
 			roomBranches: [
 				{ id: PSUid("rmb"), from: 1, to: 5, nodeId: a ? a.id : null },
 				{ id: PSUid("rmb"), from: 6, to: 10, nodeId: b ? b.id : null },
@@ -2001,7 +2164,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 		const a = mk(PST("judgeBranchPh", 1));
 		const b = mk(PST("judgeBranchPh", 2));
 		PSUpdateNode(sc.id, nodeId, {
-			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], roomBranches: [], elseId: null,
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], roomBranches: [], lotteryBalls: [], lotteryEmptyId: null, elseId: null,
 			countMode: "script", countScriptId: sc.id, countInteractActions: [],
 			countValue: 0, countAutoReset: false, countResetSecs: 86400, countNextResetAt: null,
 			countBranches: [
@@ -2009,12 +2172,26 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 				{ id: PSUid("cb"), from: 6, to: 10, nodeId: b ? b.id : null },
 			],
 		});
+	} else if (newType === "lottery") {
+		const a = mk(PST("judgeBranchPh", 1));
+		const b = mk(PST("judgeBranchPh", 2));
+		const e = mk(PST("lotteryEmptyPh"));
+		PSUpdateNode(sc.id, nodeId, {
+			judgeType: newType, yesId: null, noId: null, diceBranches: [], playerBranches: [], relationBranches: [], roomBranches: [], countBranches: [], elseId: null,
+			lotteryBalls: [
+				{ id: PSUid("lb"), color: "red", count: 5, nodeId: a ? a.id : null },
+				{ id: PSUid("lb"), color: "white", count: 5, nodeId: b ? b.id : null },
+			],
+			lotteryEmptyId: e ? e.id : null,
+			lotteryDrawn: {},
+			lotteryAutoReset: false, lotteryResetSecs: 86400, lotteryNextResetAt: null,
+		});
 	} else {
 		const a = mk(PST("judgeYesPh"));
 		const b = mk(PST("judgeNoPh"));
 		PSUpdateNode(sc.id, nodeId, {
 			judgeType: newType, yesId: a ? a.id : null, noId: b ? b.id : null,
-			diceBranches: [], playerBranches: [], relationBranches: [], roomBranches: [], countBranches: [], elseId: null,
+			diceBranches: [], playerBranches: [], relationBranches: [], roomBranches: [], countBranches: [], lotteryBalls: [], lotteryEmptyId: null, elseId: null,
 		});
 	}
 	return true;
@@ -2033,6 +2210,8 @@ function PSNodeEdges(nodes) {
 			if (Array.isArray(n.relationBranches)) n.relationBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
 			if (Array.isArray(n.roomBranches)) n.roomBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
 			if (Array.isArray(n.countBranches)) n.countBranches.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
+			if (Array.isArray(n.lotteryBalls)) n.lotteryBalls.forEach((b) => { if (b && b.nodeId && byId.has(b.nodeId)) edges.get(n.id).push(b.nodeId); });
+			if (n.lotteryEmptyId && byId.has(n.lotteryEmptyId)) edges.get(n.id).push(n.lotteryEmptyId);
 			if (n.elseId && byId.has(n.elseId)) edges.get(n.id).push(n.elseId);
 		} else if (n.nextId && byId.has(n.nextId)) {
 			edges.get(n.id).push(n.nextId);
@@ -2080,6 +2259,8 @@ function PSBranchNodeSet(nodes) {
 			if (Array.isArray(n.relationBranches)) n.relationBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
 			if (Array.isArray(n.roomBranches)) n.roomBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
 			if (Array.isArray(n.countBranches)) n.countBranches.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
+			if (Array.isArray(n.lotteryBalls)) n.lotteryBalls.forEach((b) => { if (b && b.nodeId) walk(b.nodeId); });
+			if (n.lotteryEmptyId) walk(n.lotteryEmptyId);
 			if (n.elseId) walk(n.elseId);
 		}
 	});
@@ -2121,6 +2302,13 @@ function PSNodeConnect(scriptId, nodeId, port, targetId) {
 		const branches = PSNormalizeCountBranches(node.countBranches);
 		if (!branches.some((b) => b.id === bid)) return { ok: false, why: "bad" };
 		patch = { countBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: targetId }) : b) };
+	} else if (typeof port === "string" && port.indexOf("lottery:") === 0) {
+		const bid = port.slice("lottery:".length);
+		const branches = PSNormalizeLotteryBalls(node.lotteryBalls);
+		if (!branches.some((b) => b.id === bid)) return { ok: false, why: "bad" };
+		patch = { lotteryBalls: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: targetId }) : b) };
+	} else if (port === "lotteryEmpty") {
+		patch = { lotteryEmptyId: targetId };
 	} else {
 		patch = { nextId: targetId, stop: false };
 	}
@@ -2154,6 +2342,12 @@ function PSNodeDisconnect(scriptId, nodeId, port) {
 		const bid = port.slice("count:".length);
 		const branches = PSNormalizeCountBranches(node.countBranches);
 		patch = { countBranches: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: null }) : b) };
+	} else if (typeof port === "string" && port.indexOf("lottery:") === 0) {
+		const bid = port.slice("lottery:".length);
+		const branches = PSNormalizeLotteryBalls(node.lotteryBalls);
+		patch = { lotteryBalls: branches.map((b) => b.id === bid ? Object.assign({}, b, { nodeId: null }) : b) };
+	} else if (port === "lotteryEmpty") {
+		patch = { lotteryEmptyId: null };
 	} else {
 		patch = { nextId: null, stop: true };
 	}
@@ -2346,7 +2540,7 @@ const PSSendByType = { chat: PSSendChat, rp: PSSendRp, narr: PSSendNarr, action:
 
  
 function PSSendJudge(node) {
-	const res = PSJudgeRoll(node, PSActive ? PSActive.targetNum : null);
+	const res = PSJudgeRoll(node, PSActive ? PSActive.targetNum : null, PSActive ? PSActive.scriptId : null);
 	if (PSActive) PSActive.lastJudge = res;
 	if (node && node.showResult !== false) {
 		let text = PSApplyTokens(node.text, PSActive ? PSActive.triggerNum : null, PSActive ? PSActive.targetNum : null, node.timeRules, res.label);
@@ -2807,6 +3001,12 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			countResetSecs: Math.max(1, Number(n.countResetSecs) || 86400),
 			countNextResetAt: (typeof n.countNextResetAt === "number") ? n.countNextResetAt : null,
 			countBranches: Array.isArray(n.countBranches) ? n.countBranches.slice() : [],
+			lotteryBalls: Array.isArray(n.lotteryBalls) ? n.lotteryBalls.slice() : [],
+			lotteryEmptyId: (typeof n.lotteryEmptyId === "string" && n.lotteryEmptyId) ? n.lotteryEmptyId : null,
+			lotteryDrawn: n.lotteryDrawn && typeof n.lotteryDrawn === "object" ? Object.assign({}, n.lotteryDrawn) : {},
+			lotteryAutoReset: n.lotteryAutoReset === true,
+			lotteryResetSecs: Math.max(1, Number(n.lotteryResetSecs) || 86400),
+			lotteryNextResetAt: (typeof n.lotteryNextResetAt === "number") ? n.lotteryNextResetAt : null,
 			elseId: (typeof n.elseId === "string" && n.elseId) ? n.elseId : null,
 		})),
 		idx: -1,
@@ -3622,6 +3822,24 @@ const PSText = {
 		judgeCountSeconds: "秒",
 		judgeCountBranchRangeLabel: "{0}~{1}次",
 		countPickScriptTitle: "选择剧本",
+		judgeLottery: "抽奖球",
+		judgeLotteryHint: "设置各颜色球数，每次判定从剩余球里无放回随机抽一个；抽完走「抽完」分支。最多红黄蓝绿白 5 种颜色，抽完分支不可删除",
+		judgeLotterySettings: "抽奖箱设置",
+		judgeLotteryTotal: "总球数：{0}",
+		judgeLotteryReset: "重置抽奖箱",
+		judgeLotteryResetBtn: "手动重置",
+		judgeLotteryAutoReset: "自动重置",
+		judgeLotteryBranches: "球分支（最多 5 色 + 抽完）",
+		judgeLotteryAdd: "添加颜色分支",
+		lotteryEmptyLabel: "抽完",
+		lotteryEmptyPh: "（抽完分支，点此编辑）",
+		lotteryStatusColor: "{0}：已抽{1} / 剩余{2}（配置{3}）",
+		lotteryNoBalls: "还没有配置球",
+		lotteryColor_red: "红",
+		lotteryColor_yellow: "黄",
+		lotteryColor_blue: "蓝",
+		lotteryColor_green: "绿",
+		lotteryColor_white: "白",
 		relOwner: "主人",
 		relLover: "恋人",
 		relWhite: "白名单",
@@ -3900,6 +4118,24 @@ const PSText = {
 		judgeCountSeconds: "s",
 		judgeCountBranchRangeLabel: "{0}–{1}",
 		countPickScriptTitle: "Pick script",
+		judgeLottery: "Lottery balls",
+		judgeLotteryHint: "Set the count for each color. Each check draws one ball without replacement from the remaining balls; when none remain it takes the \"empty\" branch. Up to red/yellow/blue/green/white (5 colors); the empty branch cannot be deleted",
+		judgeLotterySettings: "Lottery box settings",
+		judgeLotteryTotal: "Total balls: {0}",
+		judgeLotteryReset: "Reset box",
+		judgeLotteryResetBtn: "Reset now",
+		judgeLotteryAutoReset: "Auto reset",
+		judgeLotteryBranches: "Ball branches (up to 5 colors + empty)",
+		judgeLotteryAdd: "Add color branch",
+		lotteryEmptyLabel: "Empty",
+		lotteryEmptyPh: "(empty branch, click to edit)",
+		lotteryStatusColor: "{0}: drawn {1} / left {2} (configured {3})",
+		lotteryNoBalls: "No balls configured",
+		lotteryColor_red: "Red",
+		lotteryColor_yellow: "Yellow",
+		lotteryColor_blue: "Blue",
+		lotteryColor_green: "Green",
+		lotteryColor_white: "White",
 		relOwner: "Owner",
 		relLover: "Lover",
 		relWhite: "Whitelist",
@@ -4756,6 +4992,10 @@ function PSUIFlowBuild() {
 			} else if (n.judgeType === "count") {
 				const cbs = Array.isArray(n.countBranches) ? n.countBranches : [];
 				branchDefs = cbs.map((b) => ({ label: PST("judgeCountBranchRangeLabel", b.from, b.to), nodeId: b.nodeId, color: "#b07f9f" }));
+			} else if (n.judgeType === "lottery") {
+				const lbs = PSNormalizeLotteryBalls(n.lotteryBalls);
+				branchDefs = lbs.map((b) => ({ label: PSLotteryColorLabel(b.color), nodeId: b.nodeId, color: PS_LOTTERY_COLOR_MAP[b.color] || "#9aa0b5" }));
+				branchDefs.push({ label: PST("lotteryEmptyLabel"), nodeId: n.lotteryEmptyId, color: "#7a2c3a" });
 			} else {
 				branchDefs = [
 					{ label: PST("connectYes"), nodeId: n.yesId, color: "#2c7a70" },
@@ -4862,6 +5102,11 @@ function PSUIJudgePreview(n) {
 		const cbs = PSNormalizeCountBranches(n.countBranches);
 		const parts = cbs.map((b) => PST("judgeCountBranchRangeLabel", b.from, b.to));
 		return (n.countMode === "interact" ? "互动次数：" : "剧本触发次数：") + (parts.length ? parts.join("、") : "（未设置分支）");
+	}
+	if (n && n.judgeType === "lottery") {
+		const lbs = PSNormalizeLotteryBalls(n.lotteryBalls);
+		const parts = lbs.map((b) => PSLotteryColorLabel(b.color) + "×" + b.count);
+		return "抽奖球：" + (parts.length ? parts.join("、") : "（未设置球）");
 	}
 	if (n && n.judgeType === "player") {
 		const pbs = PSNormalizePlayerBranches(n.playerBranches);
@@ -6343,6 +6588,7 @@ function PSUIJudgeEditor(box, sc, node) {
 		'<option value="relation">' + PSEsc(PST("judgeRelation")) + "</option>",
 		'<option value="room">' + PSEsc(PST("judgeRoom")) + "</option>",
 		'<option value="count">' + PSEsc(PST("judgeCount")) + "</option>",
+		'<option value="lottery">' + PSEsc(PST("judgeLottery")) + "</option>",
 	].join(""), (v) => { PSJudgeSwitchType(sc.id, node.id, v); PSUIRenderAll(); });
 	sec.appendChild(PSUIEditorRow(PST("judgeType"), typeSel));
 
@@ -6365,6 +6611,10 @@ function PSUIJudgeEditor(box, sc, node) {
 		const countHint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px" });
 		countHint.textContent = PST("judgeCountHint");
 		sec.appendChild(countHint);
+	} else if (node.judgeType === "lottery") {
+		const lotteryHint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px" });
+		lotteryHint.textContent = PST("judgeLotteryHint");
+		sec.appendChild(lotteryHint);
 	} else {
 		const coinSel = PSUISelect(node.coinYesIs === "tails" ? "tails" : "heads", [
 			'<option value="heads">' + PSEsc(PST("judgeCoinHeads")) + "</option>",
@@ -6374,6 +6624,7 @@ function PSUIJudgeEditor(box, sc, node) {
 	}
 
 	if (node.judgeType === "count") PSUIJudgeCountSection(sec, sc, node);
+	if (node.judgeType === "lottery") PSUIJudgeLotterySection(sec, sc, node);
 
 	
 	const showRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
@@ -6435,6 +6686,8 @@ function PSUIJudgeEditor(box, sc, node) {
 		PSUIJudgeRoomBranches(sec, sc, node);
 	} else if (node.judgeType === "count") {
 		PSUIJudgeCountBranches(sec, sc, node);
+	} else if (node.judgeType === "lottery") {
+		PSUIJudgeLotteryBranches(sec, sc, node);
 	} else {
 		PSUIConnectEditorRow(sec, sc, node, "yes");
 		PSUIConnectEditorRow(sec, sc, node, "no");
@@ -6830,6 +7083,139 @@ function PSUIJudgeCountBranches(box, sc, node) {
 	box.appendChild(sec);
 }
 
+ 
+
+function PSUIJudgeLotterySection(box, sc, node) {
+	const sec = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#1f1830", border: "1px solid #b07f9f", marginBottom: "8px" });
+	sec.appendChild(PSEl("div", { fontWeight: "700", fontSize: "13px", color: "#f0b3ff", marginBottom: "6px" }, PSEsc(PST("judgeLotterySettings"))));
+
+	const balls = PSNormalizeLotteryBalls(node.lotteryBalls);
+	const total = balls.reduce((s, b) => s + (Number(b.count) || 0), 0);
+	sec.appendChild(PSEl("div", { fontSize: "13px", color: PS_ACCENT, marginBottom: "8px" }, PSEsc(PST("judgeLotteryTotal", total))));
+
+	const statusParts = [];
+	for (const c of PS_LOTTERY_COLORS) {
+		const ball = balls.find((b) => b.color === c);
+		const count = ball ? Number(ball.count) || 0 : 0;
+		const drawn = PSLotteryDrawnOf(node, c);
+		const rem = PSLotteryRemainingOf(node, c);
+		if (count > 0 || drawn > 0) statusParts.push(PST("lotteryStatusColor", PSLotteryColorLabel(c), drawn, rem, count));
+	}
+	const status = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px", whiteSpace: "pre-wrap", lineHeight: "1.5" });
+	status.textContent = statusParts.length ? statusParts.join("；") : PST("lotteryNoBalls");
+	sec.appendChild(status);
+
+	const resetRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const resetLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	resetLab.textContent = PST("judgeLotteryReset");
+	resetRow.appendChild(resetLab);
+	const resetBtn = PSSmallBtn(PST("judgeLotteryResetBtn"), () => { PSLotteryReset(node); PSUIRenderAll(); }, { bg: "#7a2c3a" });
+	resetBtn.style.flex = "1";
+	resetRow.appendChild(resetBtn);
+	sec.appendChild(resetRow);
+
+	const autoRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
+	const autoLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	autoLab.textContent = PST("judgeLotteryAutoReset");
+	autoRow.appendChild(autoLab);
+	const autoCb = document.createElement("input");
+	autoCb.type = "checkbox";
+	autoCb.checked = node.lotteryAutoReset === true;
+	autoCb.addEventListener("change", () => {
+		const on = autoCb.checked;
+		const totalSecs = Math.max(1, Number(node.lotteryResetSecs) || 86400);
+		PSUpdateNode(sc.id, node.id, { lotteryAutoReset: on, lotteryNextResetAt: on ? Date.now() + totalSecs * 1000 : null });
+		PSUIRenderAll();
+	});
+	autoRow.appendChild(autoCb);
+	sec.appendChild(autoRow);
+
+	if (node.lotteryAutoReset === true) {
+		const secs = Math.max(1, Number(node.lotteryResetSecs) || 86400);
+		const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+		const periodRow = PSEl("div", { display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px", paddingLeft: "18px" });
+		const mkInp = (val, label, max) => {
+			const inp = PSUIInput(String(val), null, { type: "number", min: "0", max: String(max || 9999), step: "1" });
+			inp.style.width = "56px";
+			periodRow.appendChild(inp);
+			periodRow.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "12px" }, PSEsc(label)));
+			return inp;
+		};
+		const hInp = mkInp(h, PST("judgeCountHours"), 9999);
+		const mInp = mkInp(m, PST("judgeCountMinutes"), 59);
+		const sInp = mkInp(s, PST("judgeCountSeconds"), 59);
+		const applyPeriod = () => {
+			const totalSecs = Math.max(1, (Number(hInp.value) || 0) * 3600 + (Number(mInp.value) || 0) * 60 + (Number(sInp.value) || 0));
+			PSUpdateNode(sc.id, node.id, { lotteryResetSecs: totalSecs, lotteryNextResetAt: Date.now() + totalSecs * 1000 });
+		};
+		hInp.addEventListener("change", applyPeriod);
+		mInp.addEventListener("change", applyPeriod);
+		sInp.addEventListener("change", applyPeriod);
+		sec.appendChild(periodRow);
+	}
+
+	box.appendChild(sec);
+}
+
+function PSUIJudgeLotteryBranches(box, sc, node) {
+	const sec = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#141a2c", border: "1px solid " + PS_BORDER, marginBottom: "8px" });
+	sec.appendChild(PSEl("div", { fontWeight: "700", fontSize: "13px", color: "#f0b3ff", marginBottom: "6px" }, PSEsc(PST("judgeLotteryBranches"))));
+
+	const balls = PSNormalizeLotteryBalls(node.lotteryBalls);
+	const commit = (next) => { PSUpdateNode(sc.id, node.id, { lotteryBalls: next }); PSUIRenderAll(); };
+	const setCount = (bid, val) => commit(balls.map((b) => (b.id === bid ? Object.assign({}, b, { count: Math.max(0, Math.min(100000, Number(val) || 0)) }) : b)));
+	const del = (bid) => commit(balls.filter((b) => b.id !== bid));
+
+	balls.forEach((b) => {
+		const row = PSEl("div", { display: "flex", gap: "6px", alignItems: "center", marginBottom: "6px" });
+		const chip = PSEl("span", { width: "60px", minWidth: "60px", padding: "4px 6px", borderRadius: "6px", textAlign: "center", fontSize: "12px", fontWeight: "700", background: PS_LOTTERY_COLOR_MAP[b.color] || "#9aa0b5", color: b.color === "white" ? "#10141f" : "#ffffff" }, PSEsc(PSLotteryColorLabel(b.color)));
+		row.appendChild(chip);
+		const countInp = PSUIInput(String(b.count), (v) => setCount(b.id, v), { type: "number", min: "0", step: "1" });
+		countInp.style.flex = "0 1 70px";
+		row.appendChild(countInp);
+		row.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc("个")));
+		const t = b.nodeId ? PSUINodeTargetLabel(sc, b.nodeId) : null;
+		if (t) {
+			const info = PSEl("span", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, PSEsc(t));
+			info.title = t;
+			row.appendChild(info);
+			const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, node.id, "lottery:" + b.id); PSUIRenderAll(); });
+			row.appendChild(disc);
+		} else {
+			const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, "lottery:" + b.id));
+			row.appendChild(btn);
+		}
+		const delBtn = PSSmallBtn("✕", () => del(b.id), { bg: "#5a2c3a" });
+		row.appendChild(delBtn);
+		sec.appendChild(row);
+	});
+
+	
+	const emptyRow = PSEl("div", { display: "flex", gap: "6px", alignItems: "center", marginBottom: "6px" });
+	const emptyChip = PSEl("span", { width: "60px", minWidth: "60px", padding: "4px 6px", borderRadius: "6px", textAlign: "center", fontSize: "12px", fontWeight: "700", background: "#7a2c3a", color: "#ffffff" }, PSEsc(PST("lotteryEmptyLabel")));
+	emptyRow.appendChild(emptyChip);
+	const t = node.lotteryEmptyId ? PSUINodeTargetLabel(sc, node.lotteryEmptyId) : null;
+	if (t) {
+		const info = PSEl("span", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, PSEsc(t));
+		info.title = t;
+		emptyRow.appendChild(info);
+		const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, node.id, "lotteryEmpty"); PSUIRenderAll(); });
+		emptyRow.appendChild(disc);
+	} else {
+		const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, "lotteryEmpty"));
+		emptyRow.appendChild(btn);
+	}
+	sec.appendChild(emptyRow);
+
+	if (balls.length < PS_LOTTERY_COLORS.length) {
+		const addBtn = PSSmallBtn(PST("judgeLotteryAdd"), () => { PSJudgeAddLotteryBranch(sc.id, node.id); PSUIRenderAll(); });
+		sec.appendChild(addBtn);
+	} else {
+		sec.appendChild(PSEl("div", { fontSize: "12px", color: "#6a7290" }, PSEsc(PST("judgeBranchMax"))));
+	}
+	box.appendChild(sec);
+}
+
 function PSUIRenderStatus() {
 	if (!PSUI.statusEl) return;
 	let html;
@@ -7055,6 +7441,15 @@ function PSUIConnectWinRender() {
 		const node = sc.nodes.find((n) => n.id === PSUI.connectNodeId);
 		const br = node && Array.isArray(node.countBranches) ? node.countBranches.find((b) => b.id === bid) : null;
 		portLabel = br ? PST("judgeCountBranchRangeLabel", br.from, br.to) : PST("judgeCount");
+	}
+	else if (typeof port === "string" && port.indexOf("lottery:") === 0) {
+		const bid = port.slice("lottery:".length);
+		const node = sc.nodes.find((n) => n.id === PSUI.connectNodeId);
+		const br = node && Array.isArray(node.lotteryBalls) ? node.lotteryBalls.find((b) => b.id === bid) : null;
+		portLabel = br ? PSLotteryColorLabel(br.color) : PST("judgeLottery");
+	}
+	else if (port === "lotteryEmpty") {
+		portLabel = PST("lotteryEmptyLabel");
 	}
 	if (PSUI.connectTitleEl) PSUI.connectTitleEl.textContent = PST("connectWinTitle", portLabel);
 	const others = sc.nodes.filter((n) => n.id !== PSUI.connectNodeId);
@@ -7329,6 +7724,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_RELATION_ORDER, PSRelationLabel, PSNormalizeRelationBranches, PSJudgeAddRelationBranch, PSRelationOf, PSAFCIsExtendedLover,
 		PSRoomPlayerCount, PSNormalizeRoomBranches, PSJudgeAddRoomBranch,
 		PSNormalizeCountBranches, PSJudgeAddCountBranch, PSCounterResetIfDue, PSCounterValue, PSCounterReset, PSCounterRecordScript, PSCounterRecordInteract,
+		PS_LOTTERY_COLORS, PSLotteryColorLabel, PSNormalizeLotteryBalls, PSNormalizeLotteryDrawn, PSLotteryResetIfDue, PSLotteryReset, PSLotteryDraw, PSLotteryRemainingOf, PSLotteryRemainingTotal, PSJudgeAddLotteryBranch,
 		PSInteractNode, PSCountInteractGroups, PSCountInteractGroupCount, PSCountInteractHas, PSInteractWinOpenForNode,
 		PS_ACT_ALIASES,
 		PSFire, PSRun, PSNodeNext, PSFinish, PSAbortCore, PSStop, PSTriggerFromText, PSCanSend,
