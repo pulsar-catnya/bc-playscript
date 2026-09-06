@@ -293,9 +293,19 @@ const PSStore = {
 		if (raw !== null) {
 			try { this.state = this.normalize(this.decode(raw)); }
 			catch (e) { PSErr("数据解析失败，已重置", e); this.state = this.normalize(this.emptyState()); }
+			this.migrateLocal(key, raw);
 		}
 		if (!this.state.scripts.length) this.state.scripts = [PSMakeDemoScript()];
 		return this.state;
+	},
+
+	 
+	migrateLocal(key, raw) {
+		try {
+			if (typeof raw === "string" && raw.indexOf("u:") === 0) return;
+			const next = this.encodeCloud(this.state);
+			if (typeof next === "string" && next !== raw) PSStorage.set(key, next);
+		} catch (e) {   }
 	},
 
 	 
@@ -310,6 +320,34 @@ const PSStore = {
 	},
 
 	 
+	encodeCloud(state) {
+		const json = JSON.stringify(state);
+		try {
+			if (typeof LZString !== "undefined" && LZString && typeof LZString.compressToUTF16 === "function") {
+				return "u:" + LZString.compressToUTF16(json);
+			}
+		} catch (e) {   }
+		return this.encode(state);
+	},
+
+	
+ 
+	encodeCompact(state) {
+		const json = JSON.stringify(state);
+		try {
+			if (typeof LZString !== "undefined" && LZString && typeof LZString.compressToUTF16 === "function") {
+				return "u:" + LZString.compressToUTF16(json);
+			}
+		} catch (e) {   }
+		try {
+			if (typeof LZString !== "undefined" && LZString && typeof LZString.compressToBase64 === "function") {
+				return "c:" + LZString.compressToBase64(json);
+			}
+		} catch (e) {   }
+		return json;
+	},
+
+	 
 	decode(raw) {
 		let text = raw;
 		if (typeof raw === "string" && raw.indexOf("p:") === 0) {
@@ -317,6 +355,20 @@ const PSStore = {
 				const dec = PSDeobfuscate(raw.slice(2));
 				if (typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromBase64 === "function") {
 					const d = LZString.decompressFromBase64(dec);
+					if (typeof d === "string" && d) text = d;
+				}
+			} catch (e) {   }
+		} else if (typeof raw === "string" && raw.indexOf("u:") === 0) {
+			try {
+				if (typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromUTF16 === "function") {
+					const d = LZString.decompressFromUTF16(raw.slice(2));
+					if (typeof d === "string" && d) text = d;
+				}
+			} catch (e) {   }
+		} else if (typeof raw === "string" && raw.indexOf("c:") === 0) {
+			try {
+				if (typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromBase64 === "function") {
+					const d = LZString.decompressFromBase64(raw.slice(2));
 					if (typeof d === "string" && d) text = d;
 				}
 			} catch (e) {   }
@@ -417,10 +469,16 @@ const PSStore = {
 		if (!key) return false;
 		
 		const normalScripts = this.state.scripts.filter((s) => !s.cloudBio);
-		const payload = this.encode({ v: 1, scripts: normalScripts, ui: this.state.ui, cloudCapKB: this.state.cloudCapKB });
-		const ok = PSStorage.set(key, payload);
+		const state = { v: 1, scripts: normalScripts, ui: this.state.ui, cloudCapKB: this.state.cloudCapKB };
+		const cloudPayload = this.encodeCloud(state);
+		let ok = PSStorage.set(key, cloudPayload);
+		if (!ok) {
+			
+			const compact = this.encodeCompact(state);
+			ok = PSStorage.set(key, compact);
+		}
 		if (!ok) this.warnQuota();
-		const cloudAccepted = this.saveCloud(payload);
+		const cloudAccepted = this.saveCloud(cloudPayload);
 		this.saveBio(cloudAccepted);
 		return ok;
 	},
@@ -558,7 +616,7 @@ const PSStore = {
 		const now = PSNow();
 		if (this.lastCloudWarnAt && now - this.lastCloudWarnAt < 30000) return;
 		this.lastCloudWarnAt = now;
-		try { PSToast(PST("cloudTooBig", PSByteToKB(PSUTF8Bytes(payload)), capKB)); } catch (e) {   }
+		try { PSUIWarnWinOpen(PST("warnCloudTitle"), PST("cloudTooBig", PSByteToKB(PSUTF8Bytes(payload)), capKB)); } catch (e) {   }
 	},
 
 	 
@@ -567,7 +625,7 @@ const PSStore = {
 		if (this.lastWarnAt && now - this.lastWarnAt < 15000) return;
 		this.lastWarnAt = now;
 		try { PSErr("保存失败（localStorage 配额）", PSStorage.lastError); } catch (e) {   }
-		try { PSToast(PST("saveQuota")); } catch (e) {   }
+		try { PSUIWarnWinOpen(PST("warnQuotaTitle"), PST("saveQuota")); } catch (e) {   }
 	},
 };
 
@@ -680,7 +738,7 @@ function PSCloudSelfBytes() {
 	try {
 		if (!PSStore.state) return 0;
 		const normalScripts = PSStore.state.scripts.filter((s) => !s.cloudBio);
-		const payload = PSStore.encode({ v: 1, scripts: normalScripts, ui: PSStore.state.ui, cloudCapKB: PSStore.state.cloudCapKB });
+		const payload = PSStore.encodeCloud({ v: 1, scripts: normalScripts, ui: PSStore.state.ui, cloudCapKB: PSStore.state.cloudCapKB });
 		return PSUTF8Bytes(payload);
 	} catch (e) { return 0; }
 }
@@ -745,17 +803,38 @@ function PSCloudInfo() {
 function PSCloudBioUsage() {
 	const total = PS_BIO_MAX;
 	try {
-		if (typeof Player === "undefined" || !Player || typeof Player.Description !== "string") return { used: null, total };
-		const b = PSBioBlockBounds(Player.Description);
-		if (!b || b.packIdx < 0 || b.endIdx < 0) return { used: 0, total };
-		const section = Player.Description.slice(b.packIdx, b.endIdx);
-		let used = Math.max(0, section.length);
+		if (typeof Player === "undefined" || !Player || typeof Player.Description !== "string") return { used: null, pluginUsed: null, total };
+		const desc = Player.Description;
+		const b = PSBioBlockBounds(desc);
+		if (!b || b.packIdx < 0 || b.endIdx < 0) return { used: desc.length, pluginUsed: 0, total };
+		const section = desc.slice(b.packIdx, b.endIdx);
+		let pluginUsed = Math.max(0, section.length);
 		
-		if (section.endsWith("\r\n")) used -= 2;
-		else if (section.endsWith("\n")) used -= 1;
-		else if (section.endsWith("\\n")) used -= 2;
-		return { used: Math.max(0, used), total };
-	} catch (e) { return { used: null, total }; }
+		if (section.endsWith("\r\n")) pluginUsed -= 2;
+		else if (section.endsWith("\n")) pluginUsed -= 1;
+		else if (section.endsWith("\\n")) pluginUsed -= 2;
+		return { used: desc.length, pluginUsed: Math.max(0, pluginUsed), total };
+	} catch (e) { return { used: null, pluginUsed: null, total }; }
+}
+
+ 
+function PSCloudScriptIds() {
+	const out = new Set();
+	try {
+		const raw = PSStore.lastLoginData && PSStore.lastLoginData[PSStore.cloudKey];
+		if (typeof raw === "string" && raw) {
+			const state = PSStore.normalize(PSStore.decode(raw));
+			if (state && Array.isArray(state.scripts)) for (const s of state.scripts) if (s && s.id) out.add(s.id);
+		}
+	} catch (e) {   }
+	return out;
+}
+
+ 
+function PSScriptIsCloud(sc) {
+	if (!sc) return false;
+	if (sc.cloudBio) return true;
+	return PSCloudScriptIds().has(sc.id);
 }
 
  
@@ -3767,6 +3846,7 @@ const PSText = {
 		tips: "拖标题栏移动 · 拖右下角拉伸 · 点节点卡片编辑台词 · 聊天里说出关键词自动演出",
 		cmd: "聊天室输入 /ps 开关本窗",
 		scriptsHeader: "剧本",
+		localOnlyBadge: "只保存本地",
 		scriptsHint: "点左侧选择剧本",
 		newScript: "新建剧本",
 		testRun: "手动触发",
@@ -4015,6 +4095,8 @@ const PSText = {
 		importClose: "关闭",
 		toastStarted: "▶ 演出开始：「{0}」共 {1} 句",
 		toastFinished: "演出结束：「{0}」",
+		warnQuotaTitle: "保存失败",
+		warnCloudTitle: "云端空间不足",
 		saveQuota: "数据保存失败：浏览器存储空间已满（localStorage 配额），剧本只存在内存、刷新/重登会丢失！请清理其它插件的大数据（如 LSCG 备份），控制台 PlayScript.StorageInfo() 可查占用、PlayScript.CleanLSCGBackups() 可清 LSCG 备份",
 		cloudTooBig: "剧本数据较大（约 {0}KB 压缩后，上限 {1}KB）未上传云端：只保存在本机，换电脑需用「导出/导入」迁移",
 		bioTooBig: "BIO 备份放不下（玩家描述上限 10000 字符）：勾选的剧本太多，请减少勾选「在线备份存储」的剧本",
@@ -4027,6 +4109,7 @@ const PSText = {
 		cloudSelfCap: "上限 {0}K",
 		cloudExtension: "ExtensionSettings",
 		cloudBioUsed: "BIO 备份",
+		cloudBioUsage: "已用 {0} 字符 / 总量 {1}；本插件 {2} 字符",
 		cloudAccountMissing: "未登录：暂无账号数据",
 		cloudAccountPartial: "账号快照缺失：重连或下次登录前加载本插件后补全",
 		cloudInfo: "在线存储：账号数据共 {0}K / 上限 {5}K，可用 {1}K；本插件占用 {2}K（上限 {3}K）；ExtensionSettings {4}K",
@@ -4065,6 +4148,7 @@ const PSText = {
 		tips: "Drag title to move · drag corner to resize · click a node card to edit · say the keyword in chat to play",
 		cmd: "Type /ps in chat to toggle",
 		scriptsHeader: "Scripts",
+		localOnlyBadge: "Local only",
 		scriptsHint: "Select a script on the left",
 		newScript: "New script",
 		testRun: "Manual trigger",
@@ -4313,6 +4397,8 @@ const PSText = {
 		importClose: "Close",
 		toastStarted: "▶ Started: {0} ({1} lines)",
 		toastFinished: "Finished: {0}",
+		warnQuotaTitle: "Save failed",
+		warnCloudTitle: "Cloud space limit",
 		saveQuota: "Save failed: browser storage quota exceeded — scripts exist only in memory and will be lost on reload! Clean up large data from other plugins (e.g. LSCG backups); console: PlayScript.StorageInfo() shows usage, PlayScript.CleanLSCGBackups() removes LSCG backups",
 		cloudTooBig: "Script data is large (~{0}KB compressed, cap {1}KB) and was not uploaded to the account: stored locally only — use Export/Import to move it",
 		bioTooBig: "BIO backup doesn't fit (profile description limit 10000 chars): too many scripts with \"online backup\" checked — uncheck some",
@@ -4325,6 +4411,7 @@ const PSText = {
 		cloudSelfCap: "cap {0}K",
 		cloudExtension: "ExtensionSettings",
 		cloudBioUsed: "BIO backup",
+		cloudBioUsage: "Used {0} chars / limit {1}; this plugin {2} chars",
 		cloudAccountMissing: "Not logged in: no account data",
 		cloudAccountPartial: "Account snapshot missing: reconnect or load this plugin before your next login",
 		cloudInfo: "Online storage: account data {0}K / {5}K limit, {1}K available; this plugin uses {2}K (cap {3}K); ExtensionSettings {4}K",
@@ -4395,6 +4482,7 @@ const PSUI = {
 	scriptPickWin: null, scriptPickListEl: null, scriptPickScriptId: null, scriptPickNodeId: null,
 	connectWin: null, connectTitleEl: null, connectListEl: null, connectScriptId: null, connectNodeId: null, connectPort: "next",
 	cloudWin: null, cloudTitleEl: null, cloudBodyEl: null,
+	warnWin: null, warnTitleEl: null, warnBodyEl: null,
 	dot: null,
 	toastEl: null, toastTimer: null,
 	win: { x: null, y: null, w: 1000, h: 640, minimized: false, editorW: 340 },
@@ -4839,6 +4927,9 @@ function PSUIListBuild() {
 	for (const sc of PSStore.state.scripts) {
 		const selected = sc.id === PSUI.selScriptId;
 		const running = PSActive && PSActive.scriptId === sc.id;
+		const cloudIds = PSCloudScriptIds();
+		const hasCloudInfo = !!(PSStore.lastLoginData || PSStore.lastAccountSnapshot);
+		const localOnly = hasCloudInfo && !PSScriptIsCloud(sc);
 		const row = PSEl("div", {
 			display: "flex", alignItems: "center", gap: "6px",
 			padding: "8px 8px", marginBottom: "6px", borderRadius: "8px",
@@ -4859,6 +4950,7 @@ function PSUIListBuild() {
 		const kwEl = PSEl("div", { color: PS_TEXT_DIM, fontSize: "12px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, PSEsc((sc.keyword || "")));
 		mid.appendChild(nameEl);
 		mid.appendChild(kwEl);
+		if (localOnly) mid.appendChild(PSEl("span", { display: "inline-block", marginTop: "3px", padding: "1px 6px", borderRadius: "6px", fontSize: "10px", background: "#5a2c3a", color: "#ffd9d9", border: "1px solid #b05252" }, PSEsc(PST("localOnlyBadge"))));
 		row.appendChild(mid);
 		row.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "11px" }, String(sc.nodes.length)));
 		row.addEventListener("click", () => {
@@ -7580,6 +7672,43 @@ function PSUIConnectWinRender() {
 
  
 
+function PSUIWarnWinBuild() {
+	if (PSUI.warnWin || typeof document === "undefined" || !document.body) return;
+	const win = document.createElement("div");
+	win.id = "ps-warnwin";
+	PSStyle(win, {
+		position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
+		width: "440px", maxHeight: "80vh", zIndex: "2147483590", background: PS_BG,
+		border: "2px solid #ffffff", borderRadius: "10px",
+		boxShadow: "0 8px 40px rgba(0,0,0,.7)", display: "none",
+		color: PS_TEXT, fontFamily: "sans-serif", fontSize: "14px", overflow: "hidden",
+	});
+	const title = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", background: "#141826", borderBottom: "1px solid " + PS_BORDER });
+	title.appendChild(PSEl("span", { color: "#f0b3ff", fontSize: "16px" }, "!"));
+	PSUI.warnTitleEl = PSEl("span", { fontWeight: "700", fontSize: "14px", flex: "1" });
+	title.appendChild(PSUI.warnTitleEl);
+	title.appendChild(PSSmallBtn("✕", PSUIWarnWinClose, { title: PST("closeTitle") }));
+	win.appendChild(title);
+	PSUI.warnBodyEl = PSEl("div", { padding: "12px 14px", overflowY: "auto", maxHeight: "calc(80vh - 44px)", lineHeight: "1.5", fontSize: "13px" });
+	win.appendChild(PSUI.warnBodyEl);
+	document.body.appendChild(win);
+	PSUI.warnWin = win;
+}
+
+function PSUIWarnWinOpen(title, message) {
+	PSUIWarnWinBuild();
+	if (!PSUI.warnWin) return;
+	if (PSUI.warnTitleEl) PSUI.warnTitleEl.textContent = title;
+	if (PSUI.warnBodyEl) PSUI.warnBodyEl.textContent = message;
+	PSUI.warnWin.style.display = "block";
+}
+
+function PSUIWarnWinClose() {
+	if (PSUI.warnWin) PSUI.warnWin.style.display = "none";
+}
+
+ 
+
 function PSUICloudWinBuild() {
 	if (PSUI.cloudWin || typeof document === "undefined" || !document.body) return;
 	const win = document.createElement("div");
@@ -7639,7 +7768,7 @@ function PSUICloudWinRender() {
 	if (info.available != null) row(PST("cloudAccountAvailable"), kb(info.available));
 	row(PST("cloudSelfUsed"), kb(info.self) + (info.capKB ? "（" + PST("cloudSelfCap", info.capKB) + "）" : ""));
 	row(PST("cloudExtension"), kb(info.extensionBytes) + "（" + info.extensionChars + " 字符）");
-	row(PST("cloudBioUsed"), bio.used == null ? "—" : (bio.used + " / " + bio.total + " 字符"));
+	row(PST("cloudBioUsed"), bio.used == null ? "—" : PST("cloudBioUsage", bio.used, bio.total, bio.pluginUsed == null ? "—" : bio.pluginUsed));
 }
 
 function PSUIRenderAll() {
@@ -7841,7 +7970,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSUIJudgePreview, PSUIConnectWinOpen, PSUIConnectWinClose,
 		PlayScriptOpen, PlayScriptClose, PlayScriptToggle,
 		PSVersion: () => PS_VERSION, PSLastOutfitBlocked: () => PSLastOutfitBlocked.slice(), PSLastOutfitCleared: () => PSLastOutfitCleared.slice(),
-		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSCloudBioUsage, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
+		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSCloudBioUsage, PSCloudScriptIds, PSScriptIsCloud, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
 		PSDebugOutfit: (code) => {
 			const bundle = PSDecodeOutfitCode(PSNormalizeCode(code));
 			if (!bundle) return { version: PS_VERSION, error: "decode-failed" };
