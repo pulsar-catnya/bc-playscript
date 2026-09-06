@@ -2201,6 +2201,7 @@ function PSJudgeSwitchType(scriptId, nodeId, newType) {
 function PSNodeEdges(nodes) {
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const edges = new Map(nodes.map((n) => [n.id, []]));
+	const branchSet = PSBranchNodeSet(nodes);
 	nodes.forEach((n, i) => {
 		if (n.type === "judge") {
 			if (n.yesId && byId.has(n.yesId)) edges.get(n.id).push(n.yesId);
@@ -2215,7 +2216,7 @@ function PSNodeEdges(nodes) {
 			if (n.elseId && byId.has(n.elseId)) edges.get(n.id).push(n.elseId);
 		} else if (n.nextId && byId.has(n.nextId)) {
 			edges.get(n.id).push(n.nextId);
-		} else if (!n.stop && nodes[i + 1]) {
+		} else if (!n.stop && !branchSet.has(n.id) && nodes[i + 1]) {
 			edges.get(n.id).push(nodes[i + 1].id);
 		}
 	});
@@ -2368,6 +2369,68 @@ function PSNodePreviousOf(nodes, nodeId) {
 	if (idx > 0 && !branchSet.has(node.id)) {
 		const p = nodes[idx - 1];
 		if (p && p.type !== "judge" && !p.nextId && !p.stop && !branchSet.has(p.id)) return p;
+	}
+	return null;
+}
+
+ 
+function PSNodeIncomingInfo(nodes, nodeId) {
+	if (!Array.isArray(nodes)) return null;
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+	const node = byId.get(nodeId);
+	if (!node) return null;
+	const branchLabel = (judge, port) => {
+		if (port === "yes") return PST("connectYes");
+		if (port === "no") return PST("connectNo");
+		if (port === "else") return PST("judgePlayerElse");
+		if (port === "lotteryEmpty") return PST("lotteryEmptyLabel");
+		const m = /^(\w+):(.+)$/.exec(String(port));
+		if (!m) return port;
+		const type = m[1], bid = m[2];
+		if (type === "player") {
+			const b = Array.isArray(judge.playerBranches) ? judge.playerBranches.find((x) => x.id === bid) : null;
+			const i = b ? judge.playerBranches.findIndex((x) => x.id === bid) : -1;
+			return PST("judgePlayerBranchPh", i >= 0 ? i + 1 : 1);
+		}
+		if (type === "relation") {
+			const b = Array.isArray(judge.relationBranches) ? judge.relationBranches.find((x) => x.id === bid) : null;
+			return b ? PSRelationLabel(b.rel) : PST("judgeRelation");
+		}
+		if (type === "room") {
+			const b = Array.isArray(judge.roomBranches) ? judge.roomBranches.find((x) => x.id === bid) : null;
+			return b ? PST("judgeRoomBranchRangeLabel", b.from, b.to) : PST("judgeRoom");
+		}
+		if (type === "count") {
+			const b = Array.isArray(judge.countBranches) ? judge.countBranches.find((x) => x.id === bid) : null;
+			return b ? PST("judgeCountBranchRangeLabel", b.from, b.to) : PST("judgeCount");
+		}
+		if (type === "lottery") {
+			const b = Array.isArray(judge.lotteryBalls) ? judge.lotteryBalls.find((x) => x.id === bid) : null;
+			return b ? PSLotteryColorLabel(b.color) : PST("judgeLottery");
+		}
+		return port;
+	};
+	for (const n of nodes) {
+		if (n.type === "judge") {
+			const checks = [["yes", n.yesId], ["no", n.noId], ["else", n.elseId], ["lotteryEmpty", n.lotteryEmptyId]];
+			for (const [port, id] of checks) { if (id === nodeId) return { kind: "branch", judge: n, port, label: branchLabel(n, port) }; }
+			const arrays = [["diceBranches", "dice"], ["playerBranches", "player"], ["relationBranches", "relation"], ["roomBranches", "room"], ["countBranches", "count"], ["lotteryBalls", "lottery"]];
+			for (const [field, prefix] of arrays) {
+				const arr = n[field];
+				if (Array.isArray(arr)) {
+					const b = arr.find((x) => x && x.nodeId === nodeId);
+					if (b) return { kind: "branch", judge: n, port: prefix + ":" + b.id, label: branchLabel(n, prefix + ":" + b.id) };
+				}
+			}
+		} else if (n.nextId === nodeId) {
+			return { kind: "node", node: n, port: "next" };
+		}
+	}
+	const branchSet = PSBranchNodeSet(nodes);
+	const idx = nodes.indexOf(node);
+	if (idx > 0 && node.type !== "judge" && !branchSet.has(node.id)) {
+		const p = nodes[idx - 1];
+		if (p && p.type !== "judge" && !p.nextId && !p.stop && !branchSet.has(p.id)) return { kind: "node", node: p, port: "implicit" };
 	}
 	return null;
 }
@@ -3869,6 +3932,8 @@ const PSText = {
 		connectPrev: "上一句",
 		connectPrevLabel: "连接上一句",
 		connectPrevHint: "选一个节点作为当前节点的上一句",
+		connectFirstNode: "最上方节点（第一句）",
+		connectJudgeBranch: "判定节点（{0}）· {1}",
 		connectStopped: "（已断开，不再继续）",
 		connectWouldLoop: "这样连接会循环演出刷屏，已取消本次连接",
 		outfitHint: "粘贴 BCX 服装代码（在 BCX 衣柜里导出的服装/物品代码，LZString 或 JSON 格式，长代码也支持）；演出时应用到目标角色；应用走游戏权限校验",
@@ -4165,6 +4230,8 @@ const PSText = {
 		connectPrev: "Previous",
 		connectPrevLabel: "Connect previous",
 		connectPrevHint: "Choose a node to become this node's previous line",
+		connectFirstNode: "Top node (first line)",
+		connectJudgeBranch: "Judge ({0}) · {1}",
 		connectStopped: "(disconnected, ends here)",
 		connectWouldLoop: "This connection would loop the show forever; it was cancelled",
 		outfitHint: "Paste a BCX clothing code (exported from the BCX wardrobe, LZString or JSON format); applied to the target at play time with game permission checks",
@@ -6554,12 +6621,28 @@ function PSUIConnectEditorRow(box, sc, node, port) {
 
  
 function PSUIConnectPrevEditorRow(box, sc, node) {
-	const prev = PSNodePreviousOf(sc.nodes, node.id);
+	const mainChain = PSMainChainOrder(sc);
+	const isFirst = mainChain[0] === node.id && node.type !== "judge";
+	const incoming = isFirst ? null : PSNodeIncomingInfo(sc.nodes, node.id);
 	const row = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
 	const lab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
 	lab.textContent = PST("connectPrevLabel");
 	row.appendChild(lab);
-	if (prev) {
+	if (isFirst) {
+		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_TEXT_DIM, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+		info.textContent = PST("connectFirstNode");
+		info.title = info.textContent;
+		row.appendChild(info);
+	} else if (incoming && incoming.kind === "branch") {
+		const t = PST("connectJudgeBranch", PSUITypeLabel(incoming.judge.type) + "：" + PSUIJudgePreview(incoming.judge), incoming.label);
+		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+		info.textContent = t;
+		info.title = t;
+		row.appendChild(info);
+		const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, incoming.judge.id, incoming.port); PSUIRenderAll(); });
+		row.appendChild(disc);
+	} else if (incoming && incoming.kind === "node") {
+		const prev = incoming.node;
 		const t = PSUITypeLabel(prev.type) + "：" + (prev.type === "judge" ? PSUIJudgePreview(prev) : PSUINodePreview(prev.text));
 		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
 		info.textContent = t;
@@ -7720,7 +7803,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_NICK_TOKEN, PSCharDisplayName, PSCharObjectOf, PSTriggerName, PSApplyTokens,
 		PS_TARGET_TOKEN, PSCharIsSelf, PSTargetInRoom,
 		PS_TIME_TOKEN, PSTimeHMToMin, PSTimeRuleMinutes, PSTimeRuleMatch, PSTimeRuleText, PSNormalizeTimeRules, PSNormalizeTimeTriggerRules, PSTimeTriggerScan,
-		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSJudgeBranchSubtree, PSJudgeSwitchType, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSNodePreviousOf, PSNodeConnectPrevious, PSNodeDisconnectPrevious, PSMainChainOrder, PSAddNodeAfter, PSValidDiceExpr, PSNormalizeJudgeType, PSNormalizePlayerIds, PSNormalizePlayerBranches, PSJudgeAddPlayerBranch, PSPortTarget,
+		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSJudgeBranchSubtree, PSJudgeSwitchType, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSNodePreviousOf, PSNodeIncomingInfo, PSNodeConnectPrevious, PSNodeDisconnectPrevious, PSMainChainOrder, PSAddNodeAfter, PSValidDiceExpr, PSNormalizeJudgeType, PSNormalizePlayerIds, PSNormalizePlayerBranches, PSJudgeAddPlayerBranch, PSPortTarget,
 		PS_RELATION_ORDER, PSRelationLabel, PSNormalizeRelationBranches, PSJudgeAddRelationBranch, PSRelationOf, PSAFCIsExtendedLover,
 		PSRoomPlayerCount, PSNormalizeRoomBranches, PSJudgeAddRoomBranch,
 		PSNormalizeCountBranches, PSJudgeAddCountBranch, PSCounterResetIfDue, PSCounterValue, PSCounterReset, PSCounterRecordScript, PSCounterRecordInteract,
