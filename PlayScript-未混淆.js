@@ -252,7 +252,7 @@ const PSStore = {
 							playerBranches: PSNormalizePlayerBranches(n.playerBranches),
 							relationBranches: PSNormalizeRelationBranches(n.relationBranches),
 							roomBranches: PSNormalizeRoomBranches(n.roomBranches),
-							countMode: n.countMode === "interact" ? "interact" : (n.countMode === "orgasm" ? "orgasm" : "script"),
+							countMode: n.countMode === "interact" ? "interact" : (n.countMode === "orgasm" ? "orgasm" : (n.countMode === "node" ? "node" : "script")),
 							countScriptId: (typeof n.countScriptId === "string" && n.countScriptId) ? n.countScriptId : null,
 							countInteractActions: PSInteractNormalizeActions(n.countInteractActions),
 							countValue: Math.max(0, Number(n.countValue) || 0),
@@ -1071,7 +1071,7 @@ function PSAddNode(scriptId, node, atIdx) {
 		playerBranches: PSNormalizePlayerBranches(node && node.playerBranches),
 		relationBranches: PSNormalizeRelationBranches(node && node.relationBranches),
 		roomBranches: PSNormalizeRoomBranches(node && node.roomBranches),
-		countMode: (node && node.countMode === "interact") ? "interact" : ((node && node.countMode === "orgasm") ? "orgasm" : "script"),
+		countMode: (node && node.countMode === "interact") ? "interact" : ((node && node.countMode === "orgasm") ? "orgasm" : ((node && node.countMode === "node") ? "node" : "script")),
 		countScriptId: (node && typeof node.countScriptId === "string" && node.countScriptId) ? node.countScriptId : null,
 		countInteractActions: PSInteractNormalizeActions(node && node.countInteractActions),
 		countValue: Math.max(0, Number((node && node.countValue) || 0)),
@@ -1227,7 +1227,7 @@ function PSUpdateNode(scriptId, nodeId, patch) {
 	if ("playerBranches" in patch) n.playerBranches = PSNormalizePlayerBranches(patch.playerBranches);
 	if ("relationBranches" in patch) n.relationBranches = PSNormalizeRelationBranches(patch.relationBranches);
 	if ("roomBranches" in patch) n.roomBranches = PSNormalizeRoomBranches(patch.roomBranches);
-	if ("countMode" in patch) n.countMode = patch.countMode === "interact" ? "interact" : (patch.countMode === "orgasm" ? "orgasm" : "script");
+	if ("countMode" in patch) n.countMode = patch.countMode === "interact" ? "interact" : (patch.countMode === "orgasm" ? "orgasm" : (patch.countMode === "node" ? "node" : "script"));
 	if ("countScriptId" in patch) n.countScriptId = (patch.countScriptId && typeof patch.countScriptId === "string") ? patch.countScriptId : null;
 	if ("countInteractActions" in patch) n.countInteractActions = PSInteractNormalizeActions(patch.countInteractActions);
 	if ("countValue" in patch) n.countValue = Math.max(0, Number(patch.countValue) || 0);
@@ -2042,6 +2042,18 @@ function PSCounterRecordOrgasm() {
 }
 
  
+function PSCounterRecordNode(scriptId, nodeId) {
+	const sc = PSFindScript(scriptId);
+	if (!sc) return 0;
+	const n = sc.nodes.find((x) => x.id === nodeId);
+	if (!n || n.type !== "judge" || n.judgeType !== "count" || n.countMode !== "node") return 0;
+	if (PSCounterResetIfDue(n)) {   }
+	n.countValue = (typeof n.countValue === "number" ? n.countValue : 0) + 1;
+	PSStore.requestSave();
+	return n.countValue;
+}
+
+ 
 
 const PS_LOTTERY_COLORS = ["red", "yellow", "blue", "green", "white", "purple"];
 const PS_LOTTERY_COLOR_MAP = { red: "#e74c3c", yellow: "#f1c40f", blue: "#3498db", green: "#2ecc71", white: "#ecf0f1", purple: "#9b59b6" };
@@ -2795,6 +2807,9 @@ const PSSendByType = { chat: PSSendChat, rp: PSSendRp, narr: PSSendNarr, action:
 
  
 function PSSendJudge(node) {
+	if (node && node.judgeType === "count" && node.countMode === "node" && PSActive) {
+		node.countValue = PSCounterRecordNode(PSActive.scriptId, node.id);
+	}
 	const res = PSJudgeRoll(node, PSActive ? PSActive.targetNum : null, PSActive ? PSActive.scriptId : null);
 	if (PSActive) PSActive.lastJudge = res;
 	if (node && node.showResult !== false) {
@@ -3248,7 +3263,7 @@ function PSRun(s, nodes, triggerNum, targetNum) {
 			playerBranches: Array.isArray(n.playerBranches) ? n.playerBranches.map((b) => ({ id: b.id, ids: (Array.isArray(b.ids) ? b.ids.slice() : []), nodeId: b.nodeId })) : [],
 			relationBranches: Array.isArray(n.relationBranches) ? n.relationBranches.map((b) => ({ id: b.id, rel: b.rel, nodeId: b.nodeId })) : [],
 			roomBranches: Array.isArray(n.roomBranches) ? n.roomBranches.map((b) => ({ id: b.id, from: b.from, to: b.to, nodeId: b.nodeId })) : [],
-			countMode: n.countMode === "interact" ? "interact" : (n.countMode === "orgasm" ? "orgasm" : "script"),
+			countMode: n.countMode === "interact" ? "interact" : (n.countMode === "orgasm" ? "orgasm" : (n.countMode === "node" ? "node" : "script")),
 			countScriptId: (typeof n.countScriptId === "string" && n.countScriptId) ? n.countScriptId : null,
 			countInteractActions: Array.isArray(n.countInteractActions) ? n.countInteractActions.slice() : [],
 			countValue: Math.max(0, Number(n.countValue) || 0),
@@ -4073,6 +4088,8 @@ const PSText = {
 		judgeCountInteract: "互动触发次数",
 		judgeCountOrgasm: "高潮次数",
 		judgeCountOrgasmHint: "统计本剧本设置「高潮次数」之后玩家新发生的高潮次数（不包含设置前的历史高潮计数）",
+		judgeCountNode: "本节点激活次数",
+		judgeCountNodeHint: "统计剧本每次演出走到这个判定节点本身的次数；每次经过该节点时计数 +1",
 		judgeCountScriptTarget: "统计的剧本",
 		judgeCountInteractActions: "统计的互动",
 		judgeCountValue: "当前次数",
@@ -4380,6 +4397,8 @@ const PSText = {
 		judgeCountInteract: "Interaction triggers",
 		judgeCountOrgasm: "Orgasm count",
 		judgeCountOrgasmHint: "Counts orgasms that happen after this script was set to orgasm counting (does not include the game's historical orgasm count)",
+		judgeCountNode: "Node activation count",
+		judgeCountNodeHint: "Counts how many times the performance reaches this judge node itself; every pass through this node increments the counter",
 		judgeCountScriptTarget: "Script to count",
 		judgeCountInteractActions: "Interactions to count",
 		judgeCountValue: "Current count",
@@ -5388,7 +5407,7 @@ function PSUIJudgePreview(n) {
 	if (n && n.judgeType === "count") {
 		const cbs = PSNormalizeCountBranches(n.countBranches);
 		const parts = cbs.map((b) => PST("judgeCountBranchRangeLabel", b.from, b.to));
-		return (n.countMode === "interact" ? "互动次数：" : (n.countMode === "orgasm" ? "高潮次数：" : "剧本触发次数：")) + (parts.length ? parts.join("、") : "（未设置分支）");
+		return (n.countMode === "interact" ? "互动次数：" : (n.countMode === "orgasm" ? "高潮次数：" : (n.countMode === "node" ? "本节点激活次数：" : "剧本触发次数："))) + (parts.length ? parts.join("、") : "（未设置分支）");
 	}
 	if (n && n.judgeType === "lottery") {
 		const lbs = PSNormalizeLotteryBalls(n.lotteryBalls);
@@ -7266,10 +7285,11 @@ function PSUIJudgeCountSection(box, sc, node) {
 	const sec = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#1f1830", border: "1px solid #b07f9f", marginBottom: "8px" });
 	sec.appendChild(PSEl("div", { fontWeight: "700", fontSize: "13px", color: "#f0b3ff", marginBottom: "6px" }, PSEsc(PST("judgeCountSettings"))));
 
-	const modeSel = PSUISelect(node.countMode === "interact" ? "interact" : (node.countMode === "orgasm" ? "orgasm" : "script"), [
+	const modeSel = PSUISelect(node.countMode === "interact" ? "interact" : (node.countMode === "orgasm" ? "orgasm" : (node.countMode === "node" ? "node" : "script")), [
 		'<option value="script">' + PSEsc(PST("judgeCountScript")) + "</option>",
 		'<option value="interact">' + PSEsc(PST("judgeCountInteract")) + "</option>",
 		'<option value="orgasm">' + PSEsc(PST("judgeCountOrgasm")) + "</option>",
+		'<option value="node">' + PSEsc(PST("judgeCountNode")) + "</option>",
 	].join(""), (v) => { PSUpdateNode(sc.id, node.id, { countMode: v, countValue: 0, countNextResetAt: null, countOrgasmBaseline: v === "orgasm" ? PSOrgasmCountNow() : null }); PSUIRenderAll(); });
 	sec.appendChild(PSUIEditorRow(PST("judgeCountMode"), modeSel));
 
@@ -7289,6 +7309,10 @@ function PSUIJudgeCountSection(box, sc, node) {
 	} else if (node.countMode === "orgasm") {
 		const hint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px", lineHeight: "1.5" });
 		hint.textContent = PST("judgeCountOrgasmHint");
+		sec.appendChild(hint);
+	} else if (node.countMode === "node") {
+		const hint = PSEl("div", { fontSize: "12px", color: PS_TEXT_DIM, marginBottom: "8px", lineHeight: "1.5" });
+		hint.textContent = PST("judgeCountNodeHint");
 		sec.appendChild(hint);
 	} else {
 		const pickRow = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
@@ -8078,7 +8102,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSJudgeBranchSubtree, PSJudgeSwitchType, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSNodePreviousOf, PSNodeIncomingInfo, PSNodeIncomingInfos, PSNodeConnectPrevious, PSNodeDisconnectPrevious, PSMainChainOrder, PSAddNodeAfter, PSValidDiceExpr, PSNormalizeJudgeType, PSNormalizePlayerIds, PSNormalizePlayerBranches, PSJudgeAddPlayerBranch, PSPortTarget,
 		PS_RELATION_ORDER, PSRelationLabel, PSNormalizeRelationBranches, PSJudgeAddRelationBranch, PSRelationOf, PSAFCIsExtendedLover,
 		PSRoomPlayerCount, PSNormalizeRoomBranches, PSJudgeAddRoomBranch,
-		PSNormalizeCountBranches, PSJudgeAddCountBranch, PSCounterResetIfDue, PSCounterValue, PSCounterReset, PSCounterRecordScript, PSCounterRecordInteract, PSOrgasmCountNow, PSCounterRecordOrgasm,
+		PSNormalizeCountBranches, PSJudgeAddCountBranch, PSCounterResetIfDue, PSCounterValue, PSCounterReset, PSCounterRecordScript, PSCounterRecordInteract, PSOrgasmCountNow, PSCounterRecordOrgasm, PSCounterRecordNode,
 		PS_LOTTERY_COLORS, PSLotteryColorLabel, PSNormalizeLotteryBalls, PSNormalizeLotteryDrawn, PSLotteryResetIfDue, PSLotteryReset, PSLotteryDraw, PSLotteryRemainingOf, PSLotteryRemainingTotal, PSJudgeAddLotteryBranch,
 		PSInteractNode, PSCountInteractGroups, PSCountInteractGroupCount, PSCountInteractHas, PSInteractWinOpenForNode,
 		PS_ACT_ALIASES,
