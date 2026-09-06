@@ -2374,11 +2374,12 @@ function PSNodePreviousOf(nodes, nodeId) {
 }
 
  
-function PSNodeIncomingInfo(nodes, nodeId) {
-	if (!Array.isArray(nodes)) return null;
+function PSNodeIncomingInfos(nodes, nodeId) {
+	if (!Array.isArray(nodes)) return [];
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const node = byId.get(nodeId);
-	if (!node) return null;
+	if (!node) return [];
+	const out = [];
 	const branchLabel = (judge, port) => {
 		if (port === "yes") return PST("connectYes");
 		if (port === "no") return PST("connectNo");
@@ -2388,8 +2389,8 @@ function PSNodeIncomingInfo(nodes, nodeId) {
 		if (!m) return port;
 		const type = m[1], bid = m[2];
 		if (type === "player") {
-			const b = Array.isArray(judge.playerBranches) ? judge.playerBranches.find((x) => x.id === bid) : null;
-			const i = b ? judge.playerBranches.findIndex((x) => x.id === bid) : -1;
+			const arr = Array.isArray(judge.playerBranches) ? judge.playerBranches : [];
+			const i = arr.findIndex((x) => x.id === bid);
 			return PST("judgePlayerBranchPh", i >= 0 ? i + 1 : 1);
 		}
 		if (type === "relation") {
@@ -2413,26 +2414,32 @@ function PSNodeIncomingInfo(nodes, nodeId) {
 	for (const n of nodes) {
 		if (n.type === "judge") {
 			const checks = [["yes", n.yesId], ["no", n.noId], ["else", n.elseId], ["lotteryEmpty", n.lotteryEmptyId]];
-			for (const [port, id] of checks) { if (id === nodeId) return { kind: "branch", judge: n, port, label: branchLabel(n, port) }; }
+			for (const [port, id] of checks) { if (id === nodeId) out.push({ kind: "branch", judge: n, port, label: branchLabel(n, port) }); }
 			const arrays = [["diceBranches", "dice"], ["playerBranches", "player"], ["relationBranches", "relation"], ["roomBranches", "room"], ["countBranches", "count"], ["lotteryBalls", "lottery"]];
 			for (const [field, prefix] of arrays) {
 				const arr = n[field];
 				if (Array.isArray(arr)) {
-					const b = arr.find((x) => x && x.nodeId === nodeId);
-					if (b) return { kind: "branch", judge: n, port: prefix + ":" + b.id, label: branchLabel(n, prefix + ":" + b.id) };
+					for (const b of arr) {
+						if (b && b.nodeId === nodeId) out.push({ kind: "branch", judge: n, port: prefix + ":" + b.id, label: branchLabel(n, prefix + ":" + b.id) });
+					}
 				}
 			}
 		} else if (n.nextId === nodeId) {
-			return { kind: "node", node: n, port: "next" };
+			out.push({ kind: "node", node: n, port: "next" });
 		}
 	}
 	const branchSet = PSBranchNodeSet(nodes);
 	const idx = nodes.indexOf(node);
 	if (idx > 0 && node.type !== "judge" && !branchSet.has(node.id)) {
 		const p = nodes[idx - 1];
-		if (p && p.type !== "judge" && !p.nextId && !p.stop && !branchSet.has(p.id)) return { kind: "node", node: p, port: "implicit" };
+		if (p && p.type !== "judge" && !p.nextId && !p.stop && !branchSet.has(p.id)) out.push({ kind: "node", node: p, port: "implicit" });
 	}
-	return null;
+	return out;
+}
+
+ 
+function PSNodeIncomingInfo(nodes, nodeId) {
+	return PSNodeIncomingInfos(nodes, nodeId)[0] || null;
 }
 
  
@@ -6623,38 +6630,47 @@ function PSUIConnectEditorRow(box, sc, node, port) {
 function PSUIConnectPrevEditorRow(box, sc, node) {
 	const mainChain = PSMainChainOrder(sc);
 	const isFirst = mainChain[0] === node.id && node.type !== "judge";
-	const incoming = isFirst ? null : PSNodeIncomingInfo(sc.nodes, node.id);
-	const row = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" });
-	const lab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
+	const infos = isFirst ? [] : PSNodeIncomingInfos(sc.nodes, node.id);
+	const row = PSEl("div", { display: "flex", alignItems: "flex-start", gap: "8px", marginBottom: "8px" });
+	const lab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM, paddingTop: "4px" });
 	lab.textContent = PST("connectPrevLabel");
 	row.appendChild(lab);
+	const list = PSEl("div", { flex: "1", minWidth: "0" });
+
+	const addInfo = (text, onClick) => {
+		const line = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" });
+		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+		info.textContent = text;
+		info.title = text;
+		line.appendChild(info);
+		if (onClick) {
+			const disc = PSSmallBtn(PST("connectDisconnect"), () => { onClick(); PSUIRenderAll(); });
+			line.appendChild(disc);
+		}
+		list.appendChild(line);
+	};
+
 	if (isFirst) {
-		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_TEXT_DIM, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
-		info.textContent = PST("connectFirstNode");
-		info.title = info.textContent;
-		row.appendChild(info);
-	} else if (incoming && incoming.kind === "branch") {
-		const t = PST("connectJudgeBranch", PSUITypeLabel(incoming.judge.type) + "：" + PSUIJudgePreview(incoming.judge), incoming.label);
-		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
-		info.textContent = t;
-		info.title = t;
-		row.appendChild(info);
-		const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnect(sc.id, incoming.judge.id, incoming.port); PSUIRenderAll(); });
-		row.appendChild(disc);
-	} else if (incoming && incoming.kind === "node") {
-		const prev = incoming.node;
-		const t = PSUITypeLabel(prev.type) + "：" + (prev.type === "judge" ? PSUIJudgePreview(prev) : PSUINodePreview(prev.text));
-		const info = PSEl("div", { flex: "1", minWidth: "0", fontSize: "12px", color: PS_ACCENT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
-		info.textContent = t;
-		info.title = t;
-		row.appendChild(info);
-		const disc = PSSmallBtn(PST("connectDisconnect"), () => { PSNodeDisconnectPrevious(sc.id, node.id); PSUIRenderAll(); });
-		row.appendChild(disc);
+		addInfo(PST("connectFirstNode"), null);
+	} else if (infos.length) {
+		for (const inc of infos) {
+			if (inc.kind === "branch") {
+				const text = PST("connectJudgeBranch", PSUITypeLabel(inc.judge.type) + "：" + PSUIJudgePreview(inc.judge), inc.label);
+				addInfo(text, () => PSNodeDisconnect(sc.id, inc.judge.id, inc.port));
+			} else {
+				const prev = inc.node;
+				const text = PSUITypeLabel(prev.type) + "：" + (prev.type === "judge" ? PSUIJudgePreview(prev) : PSUINodePreview(prev.text));
+				addInfo(text, () => PSNodeDisconnect(sc.id, prev.id, "next"));
+			}
+		}
 	} else {
+		const line = PSEl("div", { display: "flex", alignItems: "center", gap: "8px" });
 		const btn = PSSmallBtn(PST("connectBtn"), () => PSUIConnectWinOpen(sc.id, node.id, "prev"));
-		row.appendChild(btn);
-		row.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc(PST("connectPrevHint"))));
+		line.appendChild(btn);
+		line.appendChild(PSEl("span", { fontSize: "12px", color: PS_TEXT_DIM }, PSEsc(PST("connectPrevHint"))));
+		list.appendChild(line);
 	}
+	row.appendChild(list);
 	box.appendChild(row);
 }
 
@@ -7803,7 +7819,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PS_NICK_TOKEN, PSCharDisplayName, PSCharObjectOf, PSTriggerName, PSApplyTokens,
 		PS_TARGET_TOKEN, PSCharIsSelf, PSTargetInRoom,
 		PS_TIME_TOKEN, PSTimeHMToMin, PSTimeRuleMinutes, PSTimeRuleMatch, PSTimeRuleText, PSNormalizeTimeRules, PSNormalizeTimeTriggerRules, PSTimeTriggerScan,
-		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSJudgeBranchSubtree, PSJudgeSwitchType, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSNodePreviousOf, PSNodeIncomingInfo, PSNodeConnectPrevious, PSNodeDisconnectPrevious, PSMainChainOrder, PSAddNodeAfter, PSValidDiceExpr, PSNormalizeJudgeType, PSNormalizePlayerIds, PSNormalizePlayerBranches, PSJudgeAddPlayerBranch, PSPortTarget,
+		PS_ROLL_TOKEN, PSJudgeRoll, PSNormalizeDiceBranches, PSJudgeAddDiceBranch, PSJudgeBranchSubtree, PSJudgeSwitchType, PSNodeEdges, PSNodeConnectionWouldCycle, PSBranchNodeSet, PSNodeConnect, PSNodeDisconnect, PSNodePreviousOf, PSNodeIncomingInfo, PSNodeIncomingInfos, PSNodeConnectPrevious, PSNodeDisconnectPrevious, PSMainChainOrder, PSAddNodeAfter, PSValidDiceExpr, PSNormalizeJudgeType, PSNormalizePlayerIds, PSNormalizePlayerBranches, PSJudgeAddPlayerBranch, PSPortTarget,
 		PS_RELATION_ORDER, PSRelationLabel, PSNormalizeRelationBranches, PSJudgeAddRelationBranch, PSRelationOf, PSAFCIsExtendedLover,
 		PSRoomPlayerCount, PSNormalizeRoomBranches, PSJudgeAddRoomBranch,
 		PSNormalizeCountBranches, PSJudgeAddCountBranch, PSCounterResetIfDue, PSCounterValue, PSCounterReset, PSCounterRecordScript, PSCounterRecordInteract,
