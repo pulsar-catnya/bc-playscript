@@ -14,7 +14,7 @@ const PSErr = (...a) => console.error("[PlayScript]", ...a);
  
 const PS_SAVE_DEBOUNCE_MS = 400;
  
-const PS_VERSION = "1.8.0";
+const PS_VERSION = "1.14.325";
  
 let PSLastOutfitBlocked = [];
  
@@ -4240,7 +4240,7 @@ const PSText = {
 		cloudSelfUsed: "本插件占用",
 		cloudSelfCap: "上限 {0}K",
 		cloudExtension: "ExtensionSettings",
-		cloudBioUsed: "BIO 备份",
+		cloudBioUsed: "BIO存储显示",
 		cloudBioUsage: "已用 {0} 字符 / 总量 {1}；本插件 {2} 字符",
 		cloudAccountMissing: "未登录：暂无账号数据",
 		cloudAccountPartial: "账号快照缺失：重连或下次登录前加载本插件后补全",
@@ -4549,7 +4549,7 @@ const PSText = {
 		cloudSelfUsed: "This plugin",
 		cloudSelfCap: "cap {0}K",
 		cloudExtension: "ExtensionSettings",
-		cloudBioUsed: "BIO backup",
+		cloudBioUsed: "BIO storage display",
 		cloudBioUsage: "Used {0} chars / limit {1}; this plugin {2} chars",
 		cloudAccountMissing: "Not logged in: no account data",
 		cloudAccountPartial: "Account snapshot missing: reconnect or load this plugin before your next login",
