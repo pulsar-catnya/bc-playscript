@@ -169,6 +169,8 @@ const PSStore = {
 	lastBioHoldWarnAt: null,
 	lastAccountSnapshot: null,     
 	lastLoginData: null,           
+	cloudScriptIds: new Set(),     
+	cloudInfoReady: false,         
 
 	 
 	baseKey() {
@@ -497,8 +499,30 @@ const PSStore = {
 			const obj = {};
 			obj[this.cloudKey] = payload;
 			ServerAccountUpdate.QueueData(obj);
+			
+			try {
+				if (!this.lastLoginData || typeof this.lastLoginData !== "object") this.lastLoginData = {};
+				this.lastLoginData[this.cloudKey] = payload;
+				const b = PSUTF8Bytes(payload);
+				if (this.lastAccountSnapshot && this.lastAccountSnapshot.keys && typeof this.lastAccountSnapshot.keys === "object") {
+					this.lastAccountSnapshot.keys[this.cloudKey] = b;
+					this.lastAccountSnapshot.self = b;
+					let total = 0;
+					for (const k of Object.keys(this.lastAccountSnapshot.keys)) total += Number(this.lastAccountSnapshot.keys[k]) || 0;
+					this.lastAccountSnapshot.total = total;
+				}
+			} catch (e) {   }
+			this.refreshCloudInfo();
 			return true;
 		} catch (e) {   return false; }
+	},
+
+	 
+	refreshCloudInfo() {
+		try {
+			this.cloudScriptIds = PSCloudScriptIds();
+			this.cloudInfoReady = !!(this.lastLoginData || this.lastAccountSnapshot);
+		} catch (e) {   }
 	},
 
 	 
@@ -835,6 +859,14 @@ function PSScriptIsCloud(sc) {
 	if (!sc) return false;
 	if (sc.cloudBio) return true;
 	return PSCloudScriptIds().has(sc.id);
+}
+
+ 
+function PSScriptStorage(sc) {
+	if (!sc) return "unknown";
+	if (sc.cloudBio) return "bio";
+	if (!PSStore.cloudInfoReady) return "unknown";
+	return PSStore.cloudScriptIds.has(sc.id) ? "cloud" : "local";
 }
 
  
@@ -3846,7 +3878,8 @@ const PSText = {
 		tips: "拖标题栏移动 · 拖右下角拉伸 · 点节点卡片编辑台词 · 聊天里说出关键词自动演出",
 		cmd: "聊天室输入 /ps 开关本窗",
 		scriptsHeader: "剧本",
-		localOnlyBadge: "只保存本地",
+		localOnlyBadge: "本地存储",
+		bioStorageBadge: "BIO存储",
 		scriptsHint: "点左侧选择剧本",
 		newScript: "新建剧本",
 		testRun: "手动触发",
@@ -4148,7 +4181,8 @@ const PSText = {
 		tips: "Drag title to move · drag corner to resize · click a node card to edit · say the keyword in chat to play",
 		cmd: "Type /ps in chat to toggle",
 		scriptsHeader: "Scripts",
-		localOnlyBadge: "Local only",
+		localOnlyBadge: "Local",
+		bioStorageBadge: "BIO",
 		scriptsHint: "Select a script on the left",
 		newScript: "New script",
 		testRun: "Manual trigger",
@@ -4924,12 +4958,11 @@ function PSUIListBuild() {
 		box.appendChild(PSEl("div", { color: PS_TEXT_DIM, padding: "12px 6px" }, PSEsc(PST("noScript"))));
 		return;
 	}
+	PSStore.refreshCloudInfo();
 	for (const sc of PSStore.state.scripts) {
 		const selected = sc.id === PSUI.selScriptId;
 		const running = PSActive && PSActive.scriptId === sc.id;
-		const cloudIds = PSCloudScriptIds();
-		const hasCloudInfo = !!(PSStore.lastLoginData || PSStore.lastAccountSnapshot);
-		const localOnly = hasCloudInfo && !PSScriptIsCloud(sc);
+		const storage = PSScriptStorage(sc);
 		const row = PSEl("div", {
 			display: "flex", alignItems: "center", gap: "6px",
 			padding: "8px 8px", marginBottom: "6px", borderRadius: "8px",
@@ -4950,7 +4983,11 @@ function PSUIListBuild() {
 		const kwEl = PSEl("div", { color: PS_TEXT_DIM, fontSize: "12px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, PSEsc((sc.keyword || "")));
 		mid.appendChild(nameEl);
 		mid.appendChild(kwEl);
-		if (localOnly) mid.appendChild(PSEl("span", { display: "inline-block", marginTop: "3px", padding: "1px 6px", borderRadius: "6px", fontSize: "10px", background: "#5a2c3a", color: "#ffd9d9", border: "1px solid #b05252" }, PSEsc(PST("localOnlyBadge"))));
+		if (storage === "local") {
+			mid.appendChild(PSEl("span", { display: "inline-block", marginTop: "3px", padding: "1px 6px", borderRadius: "6px", fontSize: "10px", background: "#5a2c3a", color: "#ffd9d9", border: "1px solid #b05252" }, PSEsc(PST("localOnlyBadge"))));
+		} else if (storage === "bio") {
+			mid.appendChild(PSEl("span", { display: "inline-block", marginTop: "3px", padding: "1px 6px", borderRadius: "6px", fontSize: "10px", background: "#c76d07", color: "#fff7e6", border: "1px solid #e8a64a" }, PSEsc(PST("bioStorageBadge"))));
+		}
 		row.appendChild(mid);
 		row.appendChild(PSEl("span", { color: PS_TEXT_DIM, fontSize: "11px" }, String(sc.nodes.length)));
 		row.addEventListener("click", () => {
@@ -7809,6 +7846,7 @@ function PlayScriptOpen() {
 	if (PSUI.open) return;
 	if (typeof document === "undefined" || !document.body) return;
 	PSUI.open = true;
+	try { PSStore.refreshCloudInfo(); } catch (e) {   }
 	const el = PSUIRoot();
 	if (!el) return;
 	PSUIDotBuild();
@@ -7970,7 +8008,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSUIJudgePreview, PSUIConnectWinOpen, PSUIConnectWinClose,
 		PlayScriptOpen, PlayScriptClose, PlayScriptToggle,
 		PSVersion: () => PS_VERSION, PSLastOutfitBlocked: () => PSLastOutfitBlocked.slice(), PSLastOutfitCleared: () => PSLastOutfitCleared.slice(),
-		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSCloudBioUsage, PSCloudScriptIds, PSScriptIsCloud, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
+		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSCloudBioUsage, PSCloudScriptIds, PSScriptIsCloud, PSScriptStorage, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
 		PSDebugOutfit: (code) => {
 			const bundle = PSDecodeOutfitCode(PSNormalizeCode(code));
 			if (!bundle) return { version: PS_VERSION, error: "decode-failed" };
