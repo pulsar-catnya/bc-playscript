@@ -22,6 +22,7 @@ let PSLastOutfitCleared = [];
  
 const PS_MAX_SCRIPTS = 50;
 const PS_MAX_NODES = 100;
+const PS_MAX_JUDGE_BRANCHES = 6;   
 const PS_MAX_TEXT = 2000;   
 const PS_MAX_CODE = 200000; 
 const PS_MAX_CLOUD = 400000; 
@@ -966,7 +967,22 @@ function PSDuplicateScript(id) {
 	const copy = PSDeepClone(sc);
 	copy.id = PSUid("s");
 	copy.name = (String(sc.name).slice(0, 50) + " 副本").slice(0, 64);
-	copy.nodes.forEach((n) => { n.id = PSUid("n"); });
+	
+	const idMap = new Map();
+	copy.nodes.forEach((n) => { if (n && n.id) idMap.set(n.id, PSUid("n")); });
+	const remap = (v) => (typeof v === "string" && v) ? (idMap.get(v) || v) : null;
+	copy.nodes.forEach((n) => {
+		n.id = idMap.get(n.id) || n.id;
+		n.nextId = remap(n.nextId);
+		n.yesId = remap(n.yesId);
+		n.noId = remap(n.noId);
+		n.elseId = remap(n.elseId);
+		n.lotteryEmptyId = remap(n.lotteryEmptyId);
+		if (n.countScriptId === sc.id) n.countScriptId = copy.id;
+		["diceBranches", "playerBranches", "relationBranches", "roomBranches", "countBranches", "lotteryBalls"].forEach((key) => {
+			if (Array.isArray(n[key])) n[key].forEach((b) => { if (b && b.nodeId) b.nodeId = remap(b.nodeId); });
+		});
+	});
 	const idx = PSStore.state.scripts.indexOf(sc);
 	PSStore.state.scripts.splice(idx + 1, 0, copy);
 	PSStore.requestSave();
@@ -1651,7 +1667,7 @@ function PSNormalizePlayerBranches(arr) {
 			ids: PSNormalizePlayerIds(b.ids),
 			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
 		});
-		if (out.length >= 5) break;
+		if (out.length >= PS_MAX_JUDGE_BRANCHES) break;
 	}
 	return out;
 }
@@ -1695,10 +1711,10 @@ function PSPortTarget(node, port) {
  
 
  
-const PS_RELATION_ORDER = ["owner", "lover", "white", "friend", "none"];
+const PS_RELATION_ORDER = ["owner", "lover", "master", "white", "friend", "none"];
 
 function PSRelationLabel(rel) {
-	const m = { owner: PST("relOwner"), lover: PST("relLover"), white: PST("relWhite"), friend: PST("relFriend"), none: PST("relNone") };
+	const m = { owner: PST("relOwner"), master: PST("relMaster"), lover: PST("relLover"), white: PST("relWhite"), friend: PST("relFriend"), none: PST("relNone") };
 	return m[rel] || rel;
 }
 
@@ -1717,7 +1733,7 @@ function PSNormalizeRelationBranches(arr) {
 			rel,
 			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
 		});
-		if (out.length >= 5) break;
+		if (out.length >= PS_MAX_JUDGE_BRANCHES) break;
 	}
 	return out;
 }
@@ -1728,9 +1744,17 @@ function PSAFCIsExtendedLover(C) {
 		if (!C) return false;
 		const num = (typeof C.MemberNumber === "number" && C.MemberNumber) ? C.MemberNumber : null;
 		if (num == null) return false;
-		if (typeof window !== "undefined" && window && window.Liko && window.Liko.AFC
-			&& typeof window.Liko.AFC.isLover === "function"
-			&& window.Liko.AFC.isLover(num)) return true;
+		const root = (typeof window !== "undefined" && window) ? window : globalThis;
+		const afc = root && root.Liko && root.Liko.AFC;
+		if (!afc) return false;
+		if (typeof afc.isLover === "function") {
+			const r = afc.isLover(num);
+			if (r === true) return true;
+		}
+		if (typeof afc.isAFCLover === "function") {
+			const r = afc.isAFCLover(num);
+			if (r === true) return true;
+		}
 	} catch (e) {   }
 	return false;
 }
@@ -1740,6 +1764,7 @@ function PSRelationOf(C) {
 	try { if (C && typeof C.IsOwner === "function" && C.IsOwner()) return "owner"; } catch (e) {}
 	try { if (C && typeof C.IsLoverOfPlayer === "function" && C.IsLoverOfPlayer()) return "lover"; } catch (e) {}
 	try { if (C && PSAFCIsExtendedLover(C)) return "lover"; } catch (e) {}
+	try { if (C && typeof C.IsOwnedByPlayer === "function" && C.IsOwnedByPlayer()) return "master"; } catch (e) {}
 	try {
 		if (typeof Player !== "undefined" && Player && typeof Player.HasOnWhitelist === "function" && Player.HasOnWhitelist(C)) return "white";
 	} catch (e) {}
@@ -1831,7 +1856,7 @@ function PSNormalizeDiceBranches(arr) {
 			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
 		});
 	}
-	return out.slice(0, 5);
+	return out.slice(0, PS_MAX_JUDGE_BRANCHES);
 }
 
  
@@ -1859,7 +1884,7 @@ function PSNormalizeRoomBranches(arr) {
 			to,
 			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
 		});
-		if (out.length >= 5) break;
+		if (out.length >= PS_MAX_JUDGE_BRANCHES) break;
 	}
 	return out;
 }
@@ -1879,7 +1904,7 @@ function PSNormalizeCountBranches(arr) {
 			to,
 			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
 		});
-		if (out.length >= 5) break;
+		if (out.length >= PS_MAX_JUDGE_BRANCHES) break;
 	}
 	return out;
 }
@@ -1891,7 +1916,7 @@ function PSJudgeAddCountBranch(scriptId, nodeId) {
 	const node = sc.nodes.find((n) => n.id === nodeId);
 	if (!node || node.type !== "judge") return null;
 	const branches = PSNormalizeCountBranches(node.countBranches);
-	if (branches.length >= 5) { PSToast(PST("judgeBranchMax")); return null; }
+	if (branches.length >= PS_MAX_JUDGE_BRANCHES) { PSToast(PST("judgeBranchMax")); return null; }
 	const last = branches[branches.length - 1];
 	const from = last ? last.to + 1 : 1;
 	const to = from + 4;
@@ -1969,8 +1994,8 @@ function PSCounterRecordInteract(group, actName) {
 
  
 
-const PS_LOTTERY_COLORS = ["red", "yellow", "blue", "green", "white"];
-const PS_LOTTERY_COLOR_MAP = { red: "#e74c3c", yellow: "#f1c40f", blue: "#3498db", green: "#2ecc71", white: "#ecf0f1" };
+const PS_LOTTERY_COLORS = ["red", "yellow", "blue", "green", "white", "purple"];
+const PS_LOTTERY_COLOR_MAP = { red: "#e74c3c", yellow: "#f1c40f", blue: "#3498db", green: "#2ecc71", white: "#ecf0f1", purple: "#9b59b6" };
 
 function PSLotteryColorLabel(color) {
 	return PST("lotteryColor_" + color) || color;
@@ -1992,7 +2017,7 @@ function PSNormalizeLotteryBalls(arr) {
 			count: Math.max(0, Math.min(100000, Number(b.count) || 0)),
 			nodeId: (typeof b.nodeId === "string" && b.nodeId) ? b.nodeId : null,
 		});
-		if (out.length >= 5) break;
+		if (out.length >= PS_MAX_JUDGE_BRANCHES) break;
 	}
 	return out;
 }
@@ -2098,7 +2123,7 @@ function PSJudgeAddDiceBranch(scriptId, nodeId) {
 	const node = sc.nodes.find((n) => n.id === nodeId);
 	if (!node || node.type !== "judge") return null;
 	const branches = PSNormalizeDiceBranches(node.diceBranches);
-	if (branches.length >= 5) { PSToast(PST("judgeBranchMax")); return null; }
+	if (branches.length >= PS_MAX_JUDGE_BRANCHES) { PSToast(PST("judgeBranchMax")); return null; }
 	const last = branches[branches.length - 1];
 	const from = last ? last.to + 1 : 1;
 	const to = from + 9;
@@ -2117,7 +2142,7 @@ function PSJudgeAddPlayerBranch(scriptId, nodeId) {
 	const node = sc.nodes.find((n) => n.id === nodeId);
 	if (!node || node.type !== "judge") return null;
 	const branches = PSNormalizePlayerBranches(node.playerBranches);
-	if (branches.length >= 5) { PSToast(PST("judgeBranchMax")); return null; }
+	if (branches.length >= PS_MAX_JUDGE_BRANCHES) { PSToast(PST("judgeBranchMax")); return null; }
 	const n = PSAddNode(scriptId, { type: "chat", text: PST("judgeBranchPh", branches.length + 1), delay: 0, enabled: true });
 	if (!n) return null;
 	const branch = { id: PSUid("pb"), ids: [], nodeId: n.id };
@@ -2133,7 +2158,7 @@ function PSJudgeAddRelationBranch(scriptId, nodeId) {
 	const node = sc.nodes.find((n) => n.id === nodeId);
 	if (!node || node.type !== "judge") return null;
 	const branches = PSNormalizeRelationBranches(node.relationBranches);
-	if (branches.length >= 5) { PSToast(PST("judgeBranchMax")); return null; }
+	if (branches.length >= PS_MAX_JUDGE_BRANCHES) { PSToast(PST("judgeBranchMax")); return null; }
 	const used = new Set(branches.map((b) => b.rel));
 	const rel = PS_RELATION_ORDER.find((r) => !used.has(r)) || "none";
 	const n = PSAddNode(scriptId, { type: "chat", text: PST("judgeBranchPh", branches.length + 1), delay: 0, enabled: true });
@@ -2151,7 +2176,7 @@ function PSJudgeAddRoomBranch(scriptId, nodeId) {
 	const node = sc.nodes.find((n) => n.id === nodeId);
 	if (!node || node.type !== "judge") return null;
 	const branches = PSNormalizeRoomBranches(node.roomBranches);
-	if (branches.length >= 5) { PSToast(PST("judgeBranchMax")); return null; }
+	if (branches.length >= PS_MAX_JUDGE_BRANCHES) { PSToast(PST("judgeBranchMax")); return null; }
 	const last = branches[branches.length - 1];
 	const from = last ? last.to + 1 : 1;
 	const to = from + 4;
@@ -3985,12 +4010,12 @@ const PSText = {
 		judgePlayerElse: "其他玩家",
 		judgePlayerBranchPh: "分支{0}",
 		judgeRelation: "玩家关系判定",
-		judgeRelationHint: "判定对方与我的关系，按 主人→恋人→白名单→好友→无关系 的固定顺序走对应分支",
+		judgeRelationHint: "判定对方与我的关系，按 主人→恋人→M（我是对方的主人）→白名单→好友→无关系 的固定顺序走对应分支",
 		judgeRoom: "房间人数判定",
-		judgeRoomHint: "判定当前房间人数，走第一个「人数在区间内」的分支（含上下限）。例如：2~5、6~10；最多 5 个分支",
+		judgeRoomHint: "判定当前房间人数，走第一个「人数在区间内」的分支（含上下限）。例如：2~5、6~10；最多 6 个分支",
 		judgeRoomBranchRangeLabel: "{0}~{1}人",
 		judgeCount: "次数扳机（触发次数判定）",
-		judgeCountHint: "统计剧本触发次数或别人对我互动的次数，按次数区间走对应分支；最多 5 个分支",
+		judgeCountHint: "统计剧本触发次数或别人对我互动的次数，按次数区间走对应分支；最多 6 个分支",
 		judgeCountSettings: "次数扳机设置",
 		judgeCountMode: "统计类型",
 		judgeCountScript: "剧本触发次数",
@@ -4006,13 +4031,13 @@ const PSText = {
 		judgeCountBranchRangeLabel: "{0}~{1}次",
 		countPickScriptTitle: "选择剧本",
 		judgeLottery: "抽奖球",
-		judgeLotteryHint: "设置各颜色球数，每次判定从剩余球里无放回随机抽一个；抽完走「抽完」分支。最多红黄蓝绿白 5 种颜色，抽完分支不可删除",
+		judgeLotteryHint: "设置各颜色球数，每次判定从剩余球里无放回随机抽一个；抽完走「抽完」分支。最多红黄蓝绿白紫 6 种颜色，抽完分支不可删除",
 		judgeLotterySettings: "抽奖箱设置",
 		judgeLotteryTotal: "总球数：{0}",
 		judgeLotteryReset: "重置抽奖箱",
 		judgeLotteryResetBtn: "手动重置",
 		judgeLotteryAutoReset: "自动重置",
-		judgeLotteryBranches: "球分支（最多 5 色 + 抽完）",
+		judgeLotteryBranches: "球分支（最多 6 色 + 抽完）",
 		judgeLotteryAdd: "添加颜色分支",
 		lotteryEmptyLabel: "抽完",
 		lotteryEmptyPh: "（抽完分支，点此编辑）",
@@ -4023,7 +4048,9 @@ const PSText = {
 		lotteryColor_blue: "蓝",
 		lotteryColor_green: "绿",
 		lotteryColor_white: "白",
+		lotteryColor_purple: "紫",
 		relOwner: "主人",
+		relMaster: "M",
 		relLover: "恋人",
 		relWhite: "白名单",
 		relFriend: "好友",
@@ -4033,10 +4060,10 @@ const PSText = {
 		judgeDefaultLine: "判定结果：<roll>",
 		judgeYesPh: "（是分支，点此编辑）",
 		judgeNoPh: "（否分支，点此编辑）",
-		judgeDiceBranches: "结果分支（最多 5 个）",
+		judgeDiceBranches: "结果分支（最多 6 个）",
 		judgeDiceBranchesHint: "按点数范围走不同分支：1~10 走分支1、11~20 走分支2……添加分支会自动创建并连接一个台词节点",
 		judgeBranchAdd: "添加分支",
-		judgeBranchMax: "最多只能有 5 个结果分支",
+		judgeBranchMax: "最多只能有 6 个结果分支",
 		judgeBranchPh: "（分支{0}，点此编辑）",
 		insertRoll: "插入判定结果",
 		addJudge: "+ 添加判定",
@@ -4288,12 +4315,12 @@ const PSText = {
 		judgePlayerElse: "Other players",
 		judgePlayerBranchPh: "Branch {0}",
 		judgeRelation: "Relationship",
-		judgeRelationHint: "Judge the other player's relationship to you, routed in fixed order: Owner → Lover → Whitelist → Friend → No relationship",
+		judgeRelationHint: "Judge the other player's relationship to you, routed in fixed order: Owner → Lover → M (you own them) → Whitelist → Friend → No relationship",
 		judgeRoom: "Room population",
-		judgeRoomHint: "Judge the current room population, routed to the first branch whose range contains the current count (inclusive). Example: 2–5, 6–10; up to 5 branches",
+		judgeRoomHint: "Judge the current room population, routed to the first branch whose range contains the current count (inclusive). Example: 2–5, 6–10; up to 6 branches",
 		judgeRoomBranchRangeLabel: "{0}–{1}",
 		judgeCount: "Trigger counter",
-		judgeCountHint: "Count script triggers or interactions from others, then route by count range; up to 5 branches",
+		judgeCountHint: "Count script triggers or interactions from others, then route by count range; up to 6 branches",
 		judgeCountSettings: "Trigger counter settings",
 		judgeCountMode: "Count type",
 		judgeCountScript: "Script triggers",
@@ -4309,13 +4336,13 @@ const PSText = {
 		judgeCountBranchRangeLabel: "{0}–{1}",
 		countPickScriptTitle: "Pick script",
 		judgeLottery: "Lottery balls",
-		judgeLotteryHint: "Set the count for each color. Each check draws one ball without replacement from the remaining balls; when none remain it takes the \"empty\" branch. Up to red/yellow/blue/green/white (5 colors); the empty branch cannot be deleted",
+		judgeLotteryHint: "Set the count for each color. Each check draws one ball without replacement from the remaining balls; when none remain it takes the \"empty\" branch. Up to red/yellow/blue/green/white/purple (6 colors); the empty branch cannot be deleted",
 		judgeLotterySettings: "Lottery box settings",
 		judgeLotteryTotal: "Total balls: {0}",
 		judgeLotteryReset: "Reset box",
 		judgeLotteryResetBtn: "Reset now",
 		judgeLotteryAutoReset: "Auto reset",
-		judgeLotteryBranches: "Ball branches (up to 5 colors + empty)",
+		judgeLotteryBranches: "Ball branches (up to 6 colors + empty)",
 		judgeLotteryAdd: "Add color branch",
 		lotteryEmptyLabel: "Empty",
 		lotteryEmptyPh: "(empty branch, click to edit)",
@@ -4326,7 +4353,9 @@ const PSText = {
 		lotteryColor_blue: "Blue",
 		lotteryColor_green: "Green",
 		lotteryColor_white: "White",
+		lotteryColor_purple: "Purple",
 		relOwner: "Owner",
+		relMaster: "M",
 		relLover: "Lover",
 		relWhite: "Whitelist",
 		relFriend: "Friend",
@@ -4336,10 +4365,10 @@ const PSText = {
 		judgeDefaultLine: "Result: <roll>",
 		judgeYesPh: "(Yes branch — click to edit)",
 		judgeNoPh: "(No branch — click to edit)",
-		judgeDiceBranches: "Result branches (max 5)",
+		judgeDiceBranches: "Result branches (max 6)",
 		judgeDiceBranchesHint: "Route by roll result: 1~10 → branch 1, 11~20 → branch 2, etc. Adding a branch auto-creates and connects a line node",
 		judgeBranchAdd: "Add branch",
-		judgeBranchMax: "At most 5 result branches",
+		judgeBranchMax: "At most 6 result branches",
 		judgeBranchPh: "(Branch {0} — click to edit)",
 		insertRoll: "Insert result tag",
 		addJudge: "+ Add judge",
@@ -6957,7 +6986,7 @@ function PSUIJudgeDiceBranches(box, sc, node) {
 		sec.appendChild(row1);
 	});
 
-	if (branches.length < 5) {
+	if (branches.length < PS_MAX_JUDGE_BRANCHES) {
 		const addBtn = PSSmallBtn(PST("judgeBranchAdd"), () => { PSJudgeAddDiceBranch(sc.id, node.id); PSUIRenderAll(); });
 		sec.appendChild(addBtn);
 	} else {
@@ -6998,7 +7027,7 @@ function PSUIJudgePlayerBranches(box, sc, node) {
 		sec.appendChild(row);
 	});
 
-	if (branches.length < 5) {
+	if (branches.length < PS_MAX_JUDGE_BRANCHES) {
 		const addBtn = PSSmallBtn(PST("judgeBranchAdd"), () => { PSJudgeAddPlayerBranch(sc.id, node.id); PSUIRenderAll(); });
 		sec.appendChild(addBtn);
 	} else {
@@ -7056,7 +7085,7 @@ function PSUIJudgeRelationBranches(box, sc, node) {
 		sec.appendChild(row);
 	});
 
-	if (branches.length < 5) {
+	if (branches.length < PS_MAX_JUDGE_BRANCHES) {
 		const addBtn = PSSmallBtn(PST("judgeBranchAdd"), () => { PSJudgeAddRelationBranch(sc.id, node.id); PSUIRenderAll(); });
 		sec.appendChild(addBtn);
 	} else {
@@ -7103,7 +7132,7 @@ function PSUIJudgeRoomBranches(box, sc, node) {
 		sec.appendChild(row);
 	});
 
-	if (branches.length < 5) {
+	if (branches.length < PS_MAX_JUDGE_BRANCHES) {
 		const addBtn = PSSmallBtn(PST("judgeBranchAdd"), () => { PSJudgeAddRoomBranch(sc.id, node.id); PSUIRenderAll(); });
 		sec.appendChild(addBtn);
 	} else {
@@ -7302,7 +7331,7 @@ function PSUIJudgeCountBranches(box, sc, node) {
 		sec.appendChild(row);
 	});
 
-	if (branches.length < 5) {
+	if (branches.length < PS_MAX_JUDGE_BRANCHES) {
 		const addBtn = PSSmallBtn(PST("judgeBranchAdd"), () => { PSJudgeAddCountBranch(sc.id, node.id); PSUIRenderAll(); });
 		sec.appendChild(addBtn);
 	} else {
