@@ -1763,24 +1763,37 @@ function PSAFCIsExtendedLover(C) {
 }
 
  
+function PSRelationSet(C) {
+	const out = [];
+	let owner = false, lover = false, master = false, white = false, friend = false;
+	try { if (C && typeof C.IsOwner === "function" && C.IsOwner()) owner = true; } catch (e) {}
+	try { if (C && typeof C.IsLoverOfPlayer === "function" && C.IsLoverOfPlayer()) lover = true; } catch (e) {}
+	try { if (C && PSAFCIsExtendedLover(C)) lover = true; } catch (e) {}
+	try { if (C && typeof C.IsOwnedByPlayer === "function" && C.IsOwnedByPlayer()) master = true; } catch (e) {}
+	try {
+		if (C && Player && typeof C.IsOwnedByCharacter === "function" && Number.isInteger(Player.MemberNumber) && C.IsOwnedByCharacter(Player)) master = true;
+	} catch (e) {}
+	try {
+		if (C && Player && C.Ownership && typeof C.Ownership === "object" && C.Ownership.MemberNumber === Player.MemberNumber) master = true;
+	} catch (e) {}
+	try {
+		if (typeof Player !== "undefined" && Player && typeof Player.HasOnWhitelist === "function" && Player.HasOnWhitelist(C)) white = true;
+	} catch (e) {}
+	try {
+		if (typeof Player !== "undefined" && Player && typeof Player.HasOnFriendlist === "function" && Player.HasOnFriendlist(C)) friend = true;
+	} catch (e) {}
+	if (owner) out.push("owner");
+	if (lover) out.push("lover");
+	if (master) out.push("master");
+	if (white) out.push("white");
+	if (friend) out.push("friend");
+	out.push("none");
+	return out;
+}
+
+ 
 function PSRelationOf(C) {
-	try { if (C && typeof C.IsOwner === "function" && C.IsOwner()) return "owner"; } catch (e) {}
-	try { if (C && typeof C.IsLoverOfPlayer === "function" && C.IsLoverOfPlayer()) return "lover"; } catch (e) {}
-	try { if (C && PSAFCIsExtendedLover(C)) return "lover"; } catch (e) {}
-	try { if (C && typeof C.IsOwnedByPlayer === "function" && C.IsOwnedByPlayer()) return "master"; } catch (e) {}
-	try {
-		if (C && Player && typeof C.IsOwnedByCharacter === "function" && Number.isInteger(Player.MemberNumber) && C.IsOwnedByCharacter(Player)) return "master";
-	} catch (e) {}
-	try {
-		if (C && Player && C.Ownership && typeof C.Ownership === "object" && C.Ownership.MemberNumber === Player.MemberNumber) return "master";
-	} catch (e) {}
-	try {
-		if (typeof Player !== "undefined" && Player && typeof Player.HasOnWhitelist === "function" && Player.HasOnWhitelist(C)) return "white";
-	} catch (e) {}
-	try {
-		if (typeof Player !== "undefined" && Player && typeof Player.HasOnFriendlist === "function" && Player.HasOnFriendlist(C)) return "friend";
-	} catch (e) {}
-	return "none";
+	return PSRelationSet(C)[0] || "none";
 }
 
  
@@ -1804,10 +1817,10 @@ function PSJudgeRoll(node, targetNum, scriptId) {
 			const other = (Number.isInteger(t) && t > 0 && t !== me) ? t : null;
 			if (!other) return { yes: false, label: "无目标", targetId: null };
 			const C = PSCharObjectOf(other) || null;
-			const rel = PSRelationOf(C);
+			const rels = PSRelationSet(C);
 			const branches = PSNormalizeRelationBranches(node.relationBranches);
-			const br = branches.find((b) => b.rel === rel) || branches.find((b) => b.rel === "none");
-			return { yes: false, label: PSRelationLabel(rel), targetId: br ? br.nodeId : null };
+			const br = rels.map((r) => branches.find((b) => b.rel === r)).find((b) => b) || branches.find((b) => b.rel === "none");
+			return { yes: false, label: PSRelationLabel(rels[0]), targetId: br ? br.nodeId : null };
 		}
 		if (node && node.judgeType === "room") {
 			const count = PSRoomPlayerCount();
