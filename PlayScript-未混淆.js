@@ -1982,6 +1982,7 @@ function PSCounterReset(node) {
 		node.countNextResetAt = null;
 	}
 	PSStore.requestSave();
+	PSUIRefreshCountValue();
 }
 
  
@@ -1996,7 +1997,7 @@ function PSCounterRecordScript(scriptId) {
 			changed = true;
 		}
 	}
-	if (changed) PSStore.requestSave();
+	if (changed) { PSStore.requestSave(); PSUIRefreshCountValue(); }
 }
 
  
@@ -2013,7 +2014,7 @@ function PSCounterRecordInteract(group, actName) {
 			changed = true;
 		}
 	}
-	if (changed) PSStore.requestSave();
+	if (changed) { PSStore.requestSave(); PSUIRefreshCountValue(); }
 }
 
  
@@ -2038,7 +2039,7 @@ function PSCounterRecordOrgasm() {
 			changed = true;
 		}
 	}
-	if (changed) PSStore.requestSave();
+	if (changed) { PSStore.requestSave(); PSUIRefreshCountValue(); }
 }
 
  
@@ -2050,6 +2051,7 @@ function PSCounterRecordNode(scriptId, nodeId) {
 	if (PSCounterResetIfDue(n)) {   }
 	n.countValue = (typeof n.countValue === "number" ? n.countValue : 0) + 1;
 	PSStore.requestSave();
+	PSUIRefreshCountValue();
 	return n.countValue;
 }
 
@@ -4617,6 +4619,7 @@ const PSUI = {
 	interactActWin: null, interactActOpen: false, interactActGroup: null, interactActList: [],
 	interactActTitleEl: null, interactActChipEl: null, interactActListEl: null,
 	scriptPickWin: null, scriptPickListEl: null, scriptPickScriptId: null, scriptPickNodeId: null,
+	countScriptId: null, countNodeId: null, countValueEl: null,
 	connectWin: null, connectTitleEl: null, connectListEl: null, connectScriptId: null, connectNodeId: null, connectPort: "next",
 	cloudWin: null, cloudTitleEl: null, cloudBodyEl: null,
 	warnWin: null, warnTitleEl: null, warnBodyEl: null,
@@ -7281,6 +7284,15 @@ function PSUIScriptPickRender() {
 }
 
  
+function PSUIRefreshCountValue() {
+	if (typeof document === "undefined" || !PSUI.countValueEl) return;
+	const sc = PSFindScript(PSUI.countScriptId);
+	const node = sc ? sc.nodes.find((n) => n.id === PSUI.countNodeId) : null;
+	if (!sc || !node || node.type !== "judge" || node.judgeType !== "count") return;
+	PSUI.countValueEl.textContent = String(PSCounterValue(node));
+}
+
+ 
 function PSUIJudgeCountSection(box, sc, node) {
 	const sec = PSEl("div", { padding: "8px", borderRadius: "6px", background: "#1f1830", border: "1px solid #b07f9f", marginBottom: "8px" });
 	sec.appendChild(PSEl("div", { fontWeight: "700", fontSize: "13px", color: "#f0b3ff", marginBottom: "6px" }, PSEsc(PST("judgeCountSettings"))));
@@ -7331,7 +7343,11 @@ function PSUIJudgeCountSection(box, sc, node) {
 	const counterLab = PSEl("label", { width: "110px", minWidth: "110px", fontSize: "13px", color: PS_TEXT_DIM });
 	counterLab.textContent = PST("judgeCountValue");
 	counterRow.appendChild(counterLab);
-	counterRow.appendChild(PSEl("span", { flex: "1", padding: "6px 10px", borderRadius: "6px", background: "#10141f", border: "1px solid " + PS_BORDER, color: PS_ACCENT, fontSize: "13px" }, PSEsc(String(val))));
+	const valueEl = PSEl("span", { flex: "1", padding: "6px 10px", borderRadius: "6px", background: "#10141f", border: "1px solid " + PS_BORDER, color: PS_ACCENT, fontSize: "13px" }, PSEsc(String(val)));
+	PSUI.countScriptId = sc.id;
+	PSUI.countNodeId = node.id;
+	PSUI.countValueEl = valueEl;
+	counterRow.appendChild(valueEl);
 	const resetBtn = PSSmallBtn(PST("judgeCountReset"), () => { PSCounterReset(node); PSUIRenderAll(); }, { bg: "#7a2c3a" });
 	counterRow.appendChild(resetBtn);
 	sec.appendChild(counterRow);
