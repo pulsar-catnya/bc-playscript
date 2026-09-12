@@ -8169,10 +8169,11 @@ function PSCloudDetailExport(key) {
 
 function PSCloudDetailParseMd(text) {
 	try {
-		const s = String(text || "");
-		const m = /```json\s*\n([\s\S]*?)\n```/.exec(s);
+		let s = String(text || "");
+		if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
+		const m = /```json\s*\r?\n([\s\S]*?)\r?\n```/.exec(s);
 		if (m) return JSON.parse(m[1]);
-		const bare = s.trim().replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "");
+		const bare = s.trim().replace(/^```[a-zA-Z]*\r?\n?/, "").replace(/\r?\n?```$/, "");
 		return JSON.parse(bare);
 	} catch (e) { return null; }
 }
@@ -8181,14 +8182,39 @@ function PSCloudDetailParseMd(text) {
 function PSCloudDetailParseBackup(text) {
 	const value = PSCloudDetailParseMd(text);
 	if (value === null) return null;
-	const s = String(text || "");
-	const m = /^- 编码: (.+)$/m.exec(s);
+	const s = String(text || "").replace(/^\uFEFF/, "");
+	const m = /^- 编码: (.+?)\s*$/m.exec(s);
 	return { value, encoding: m ? m[1].trim() : "json" };
 }
 
  
 function PSCloudDetailDecode(v) {
 	if (typeof v !== "string") return { value: v, encoding: "object" };
+	
+	try {
+		if (v.indexOf("u:") === 0 && typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromUTF16 === "function") {
+			const d = LZString.decompressFromUTF16(v.slice(2));
+			if (d != null && d !== "") {
+				try { return { value: JSON.parse(d), encoding: "u" }; } catch (e) { return { value: d, encoding: "u-string" }; }
+			}
+		}
+	} catch (e) {   }
+	try {
+		if ((v.indexOf("c:") === 0 || v.indexOf("z:") === 0) && typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromBase64 === "function") {
+			const d = LZString.decompressFromBase64(v.slice(2));
+			if (d != null && d !== "") {
+				try { return { value: JSON.parse(d), encoding: "c" }; } catch (e) { return { value: d, encoding: "c-string" }; }
+			}
+		}
+	} catch (e) {   }
+	try {
+		if (v.indexOf("p:") === 0 && typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromBase64 === "function") {
+			const d = LZString.decompressFromBase64(PSDeobfuscate(v.slice(2)));
+			if (d != null && d !== "") {
+				try { return { value: JSON.parse(d), encoding: "p" }; } catch (e) { return { value: d, encoding: "p-string" }; }
+			}
+		}
+	} catch (e) {   }
 	try {
 		const obj = JSON.parse(v);
 		return { value: obj, encoding: "json" };
@@ -8219,15 +8245,26 @@ function PSCloudDetailEncode(value, encoding) {
 	try {
 		if (encoding === "object") return value;
 		if (encoding === "json") return JSON.stringify(value);
+		const json = typeof value === "string" ? value : JSON.stringify(value);
+		if (encoding === "u" || encoding === "u-string") {
+			if (typeof LZString === "undefined" || !LZString || typeof LZString.compressToUTF16 !== "function") return value;
+			return "u:" + LZString.compressToUTF16(json);
+		}
+		if (encoding === "c" || encoding === "c-string" || encoding === "z") {
+			if (typeof LZString === "undefined" || !LZString || typeof LZString.compressToBase64 !== "function") return value;
+			return "c:" + LZString.compressToBase64(json);
+		}
+		if (encoding === "p" || encoding === "p-string") {
+			if (typeof LZString === "undefined" || !LZString || typeof LZString.compressToBase64 !== "function") return value;
+			return "p:" + PSObfuscate(LZString.compressToBase64(json));
+		}
 		if (encoding === "lz-base64" || encoding === "lz-base64-string") {
 			if (typeof LZString === "undefined" || !LZString || typeof LZString.compressToBase64 !== "function") return value;
-			const s = typeof value === "string" ? value : JSON.stringify(value);
-			return LZString.compressToBase64(s);
+			return LZString.compressToBase64(json);
 		}
 		if (encoding === "lz-utf16" || encoding === "lz-utf16-string") {
 			if (typeof LZString === "undefined" || !LZString || typeof LZString.compressToUTF16 !== "function") return value;
-			const s = typeof value === "string" ? value : JSON.stringify(value);
-			return LZString.compressToUTF16(s);
+			return LZString.compressToUTF16(json);
 		}
 	} catch (e) {   }
 	return value;
