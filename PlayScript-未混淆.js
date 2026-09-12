@@ -8192,6 +8192,13 @@ function PSCloudDetailDecode(v) {
 	if (typeof v !== "string") return { value: v, encoding: "object" };
 	
 	try {
+		if (v.length > 0 && v.charCodeAt(0) === 9580 && typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromUTF16 === "function") {
+			const d = LZString.decompressFromUTF16(v.slice(1));
+			if (d != null && d !== "") return { value: d, encoding: "desc" };
+		}
+	} catch (e) {   }
+	
+	try {
 		if (v.indexOf("u:") === 0 && typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromUTF16 === "function") {
 			const d = LZString.decompressFromUTF16(v.slice(2));
 			if (d != null && d !== "") {
@@ -8220,18 +8227,18 @@ function PSCloudDetailDecode(v) {
 		return { value: obj, encoding: "json" };
 	} catch (e) {   }
 	try {
-		if (typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromBase64 === "function") {
+		if (/^[A-Za-z0-9+/=]+$/.test(v) && typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromBase64 === "function") {
 			const d = LZString.decompressFromBase64(v);
-			if (d != null && d !== "") {
+			if (d != null && d !== "" && typeof LZString.compressToBase64 === "function" && LZString.compressToBase64(d) === v) {
 				try { return { value: JSON.parse(d), encoding: "lz-base64" }; }
 				catch (e2) { return { value: d, encoding: "lz-base64-string" }; }
 			}
 		}
 	} catch (e) {   }
 	try {
-		if (typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromUTF16 === "function") {
+		if (typeof LZString !== "undefined" && LZString && typeof LZString.decompressFromUTF16 === "function" && typeof LZString.compressToUTF16 === "function") {
 			const d = LZString.decompressFromUTF16(v);
-			if (d != null && d !== "") {
+			if (d != null && d !== "" && LZString.compressToUTF16(d) === v) {
 				try { return { value: JSON.parse(d), encoding: "lz-utf16" }; }
 				catch (e2) { return { value: d, encoding: "lz-utf16-string" }; }
 			}
@@ -8246,6 +8253,10 @@ function PSCloudDetailEncode(value, encoding) {
 		if (encoding === "object") return value;
 		if (encoding === "json") return JSON.stringify(value);
 		const json = typeof value === "string" ? value : JSON.stringify(value);
+		if (encoding === "desc") {
+			if (typeof LZString === "undefined" || !LZString || typeof LZString.compressToUTF16 !== "function") return value;
+			return String.fromCharCode(9580) + LZString.compressToUTF16(json);
+		}
 		if (encoding === "u" || encoding === "u-string") {
 			if (typeof LZString === "undefined" || !LZString || typeof LZString.compressToUTF16 !== "function") return value;
 			return "u:" + LZString.compressToUTF16(json);
