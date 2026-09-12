@@ -895,10 +895,10 @@ function PSCloudDetailEntries() {
 	for (const [top, val] of Object.entries(src)) {
 		if ((top === "ExtensionSettings" || top === "OnlineSharedSettings" || top === "OnlineSettings") && val && typeof val === "object") {
 			for (const [k, v] of Object.entries(val)) {
-				out.push({ label: PSCloudNestedKeyLabel(top, k), bytes: PSUTF8Bytes(JSON.stringify(v ?? "")), key: top + "." + k });
+				out.push({ label: PSCloudNestedKeyLabel(top, k), bytes: PSUTF8Bytes(JSON.stringify(v ?? "")), key: top + "." + k, top, sub: k, value: v });
 			}
 		} else {
-			out.push({ label: PSCloudKeyLabel(top), bytes: PSUTF8Bytes(JSON.stringify(val ?? "")), key: top });
+			out.push({ label: PSCloudKeyLabel(top), bytes: PSUTF8Bytes(JSON.stringify(val ?? "")), key: top, top, sub: null, value: val });
 		}
 	}
 	out.sort((a, b) => {
@@ -4367,6 +4367,10 @@ const PSText = {
 		cloudBioUsage: "已用 {0} 字符 / 总量 {1}；本插件 {2} 字符",
 		cloudDetailTitle: "在线存储空间详细",
 		cloudDetailBtn: "在线存储空间详细",
+		cloudExportBtn: "导出",
+		cloudImportBtn: "导入",
+		cloudImportInvalid: "导入失败：无法解析 MD 备份",
+		cloudImportDone: "已恢复",
 		cloudDetailNone: "没有账号数据键",
 		cloudKeyPlayScript: "PlayScript（本插件）",
 		cloudKeyDescription: "玩家描述（BIO）",
@@ -4693,6 +4697,10 @@ const PSText = {
 		cloudBioUsage: "Used {0} chars / limit {1}; this plugin {2} chars",
 		cloudDetailTitle: "Online storage details",
 		cloudDetailBtn: "Online storage details",
+		cloudExportBtn: "Export",
+		cloudImportBtn: "Import",
+		cloudImportInvalid: "Import failed: cannot parse the MD backup",
+		cloudImportDone: "Restored",
 		cloudDetailNone: "No account data keys",
 		cloudKeyPlayScript: "PlayScript (this plugin)",
 		cloudKeyDescription: "Player description (BIO)",
@@ -8103,6 +8111,118 @@ function PSUICloudDetailWinClose() {
 	if (PSUI.cloudDetailWin) PSUI.cloudDetailWin.style.display = "none";
 }
 
+ 
+
+function PSUIDownloadText(filename, text) {
+	try {
+		if (typeof document === "undefined" || typeof Blob === "undefined") return false;
+		const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = filename;
+		document.body.appendChild(a);
+		a.click();
+		setTimeout(() => { URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); }, 0);
+		return true;
+	} catch (e) { PSErr("导出文件失败", e); return false; }
+}
+
+function PSUIPickTextFile(cb) {
+	try {
+		if (typeof document === "undefined" || typeof FileReader === "undefined") return;
+		const inp = document.createElement("input");
+		inp.type = "file";
+		inp.accept = ".md,.txt,text/markdown,text/plain";
+		inp.style.display = "none";
+		document.body.appendChild(inp);
+		inp.addEventListener("change", () => {
+			const f = inp.files && inp.files[0];
+			if (!f) { inp.remove(); return; }
+			const r = new FileReader();
+			r.onload = () => { try { cb(String(r.result || ""), f.name); } catch (e) { PSErr("读取文件失败", e); } inp.remove(); };
+			r.onerror = () => { PSErr("读取文件失败"); inp.remove(); };
+			r.readAsText(f, "utf-8");
+		});
+		inp.click();
+	} catch (e) { PSErr("选择文件失败", e); }
+}
+
+function PSCloudDetailEntry(key) {
+	return PSCloudDetailEntries().find((x) => x.key === key) || null;
+}
+
+function PSCloudDetailExport(key) {
+	const e = PSCloudDetailEntry(key);
+	if (!e) return;
+	const md = "# PlayScript 在线存储备份\n\n" +
+		"- 项目: " + e.label + "\n" +
+		"- 键: " + e.key + "\n" +
+		"- 导出时间: " + new Date().toISOString() + "\n" +
+		"- 大小: " + (isFinite(Number(e.bytes)) ? e.bytes + " 字节" : "—") + "\n\n" +
+		"```json\n" + JSON.stringify(e.value, null, 2) + "\n```\n";
+	const filename = "PlayScript-" + String(key).replace(/[^A-Za-z0-9_.-]+/g, "_") + ".md";
+	PSUIDownloadText(filename, md);
+}
+
+function PSCloudDetailParseMd(text) {
+	try {
+		const s = String(text || "");
+		const m = /```json\s*\n([\s\S]*?)\n```/.exec(s);
+		if (m) return JSON.parse(m[1]);
+		const bare = s.trim().replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "");
+		return JSON.parse(bare);
+	} catch (e) { return null; }
+}
+
+function PSCloudDetailRestore(e, value) {
+	if (!e || typeof e.top !== "string") return false;
+	try {
+		if (!PSStore.lastLoginData || typeof PSStore.lastLoginData !== "object") PSStore.lastLoginData = {};
+		const top = e.top, sub = e.sub;
+		if (sub) {
+			if (!PSStore.lastLoginData[top] || typeof PSStore.lastLoginData[top] !== "object") PSStore.lastLoginData[top] = {};
+			PSStore.lastLoginData[top][sub] = value;
+		} else {
+			PSStore.lastLoginData[top] = value;
+		}
+		if (typeof Player !== "undefined" && Player) {
+			if (sub) {
+				if (!Player[top] || typeof Player[top] !== "object") Player[top] = {};
+				Player[top][sub] = value;
+			} else {
+				Player[top] = value;
+			}
+		}
+		try {
+			if (typeof ServerAccountUpdate !== "undefined" && ServerAccountUpdate && typeof ServerAccountUpdate.QueueData === "function") {
+				if (top === "ExtensionSettings" && sub) {
+					if (typeof ServerPlayerExtensionSettingsSync === "function") ServerPlayerExtensionSettingsSync(sub);
+					else ServerAccountUpdate.QueueData({ ExtensionSettings: Player.ExtensionSettings });
+				} else if (top === "OnlineSettings" || top === "OnlineSharedSettings") {
+					ServerAccountUpdate.QueueData({ [top]: Player[top] });
+				} else {
+					ServerAccountUpdate.QueueData({ [top]: Player[top] });
+				}
+			}
+		} catch (e2) {   }
+		PSStore.refreshCloudInfo();
+		if (PSUI.cloudDetailWin && PSUI.cloudDetailWin.style.display !== "none") PSUICloudDetailWinRender();
+		PSToast(PST("cloudImportDone"));
+		return true;
+	} catch (e3) { PSErr("恢复失败", e3); return false; }
+}
+
+function PSCloudDetailImport(key) {
+	const e = PSCloudDetailEntry(key);
+	if (!e) return;
+	PSUIPickTextFile((text) => {
+		const value = PSCloudDetailParseMd(text);
+		if (value === null) { PSToast(PST("cloudImportInvalid")); return; }
+		PSCloudDetailRestore(e, value);
+	});
+}
+
 function PSUICloudDetailWinRender() {
 	const box = PSUI.cloudDetailBodyEl;
 	if (!box) return;
@@ -8123,7 +8243,18 @@ function PSUICloudDetailWinRender() {
 	const entries = PSCloudDetailEntries();
 	if (entries.length) {
 		for (const e of entries) {
-			row(e.label, kb(e.bytes) + "（" + (isFinite(Number(e.bytes)) ? e.bytes + " 字节" : "—") + "）", true);
+			const r = PSEl("div", { display: "flex", gap: "8px", alignItems: "center", padding: "7px 0", borderBottom: "1px solid " + PS_BORDER, fontSize: "13px" });
+			const l = PSEl("div", { width: "180px", minWidth: "180px", color: PS_TEXT_DIM, wordBreak: "break-all" });
+			l.textContent = e.label;
+			r.appendChild(l);
+			const v = PSEl("div", { flex: "1", textAlign: "right", color: PS_TEXT_DIM, wordBreak: "break-all" });
+			v.textContent = kb(e.bytes) + "（" + (isFinite(Number(e.bytes)) ? e.bytes + " 字节" : "—") + "）";
+			r.appendChild(v);
+			const expBtn = PSSmallBtn(PST("cloudExportBtn"), () => PSCloudDetailExport(e.key));
+			const impBtn = PSSmallBtn(PST("cloudImportBtn"), () => PSCloudDetailImport(e.key));
+			r.appendChild(expBtn);
+			r.appendChild(impBtn);
+			box.appendChild(r);
 		}
 	} else {
 		row(PST("cloudDetailNone"), loggedIn ? PST("cloudAccountPartial") : PST("cloudAccountMissing"), true);
@@ -8365,7 +8496,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSUIJudgePreview, PSUIConnectWinOpen, PSUIConnectWinClose,
 		PlayScriptOpen, PlayScriptClose, PlayScriptToggle,
 		PSVersion: () => PS_VERSION, PSLastOutfitBlocked: () => PSLastOutfitBlocked.slice(), PSLastOutfitCleared: () => PSLastOutfitCleared.slice(),
-		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSCloudBioUsage, PSCloudScriptIds, PSScriptIsCloud, PSScriptStorage, PSCloudKeyLabel, PSCloudDetailEntries, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
+		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSCloudBioUsage, PSCloudScriptIds, PSScriptIsCloud, PSScriptStorage, PSCloudKeyLabel, PSCloudDetailEntries, PSCloudDetailExport, PSCloudDetailImport, PSCloudDetailParseMd, PSCloudDetailRestore, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
 		PSDebugOutfit: (code) => {
 			const bundle = PSDecodeOutfitCode(PSNormalizeCode(code));
 			if (!bundle) return { version: PS_VERSION, error: "decode-failed" };
