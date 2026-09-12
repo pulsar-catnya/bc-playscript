@@ -787,6 +787,129 @@ function PSCloudLimit() {
 }
 
  
+const PS_MOD_ACCOUNT_INFO = [
+	{ top: "ExtensionSettings", key: "FBCWardrobe", zh: "WCE / BC-AEE 服装代码存储（扩展衣柜）", en: "WCE / BC-AEE wardrobe storage (outfit codes)" },
+	{ top: "ExtensionSettings", key: "WCEOverrides", zh: "WCE 分层覆盖设置", en: "WCE layering overrides" },
+	{ top: "ExtensionSettings", key: "FBC", zh: "WCE FBC 设置", en: "WCE FBC settings" },
+	{ top: "ExtensionSettings", key: "AFC", zh: "AFC 私人设置（更多恋人）", en: "AFC private settings (extended lovers)" },
+	{ top: "ExtensionSettings", key: "AFC_HeartLock", zh: "AFC HeartLock 心锁设置", en: "AFC HeartLock settings" },
+	{ top: "ExtensionSettings", key: "EBCH", zh: "EBCH 设置", en: "EBCH settings" },
+	{ top: "ExtensionSettings", key: "BCAR", zh: "BCAR 设置", en: "BCAR settings" },
+	{ top: "ExtensionSettings", key: "DOGS", zh: "DOGS 狗锁设置", en: "DOGS devious lock settings" },
+	{ top: "ExtensionSettings", key: "LSCG", zh: "LSCG 设置", en: "LSCG settings" },
+	{ top: "ExtensionSettings", key: "MBS", zh: "MBS 设置", en: "MBS settings" },
+	{ top: "ExtensionSettings", key: "MPA", zh: "MPA 设置", en: "MPA settings" },
+	{ top: "ExtensionSettings", key: "Responsive", zh: "Responsive 回复增强设置", en: "Responsive settings" },
+	{ top: "ExtensionSettings", key: "BCResponsiveData", zh: "BCResponsive 回复增强设置", en: "BCResponsive settings" },
+	{ top: "ExtensionSettings", key: "BCNotifyPlusSetting", zh: "BCNotifyPlus 增强提示设置", en: "BCNotifyPlus settings" },
+	{ top: "ExtensionSettings", key: "HSC", zh: "BC-HSC 沉浸催眠设置", en: "BC-HSC hypnosis settings" },
+	{ top: "ExtensionSettings", key: "BCX", zh: "BCX 设置", en: "BCX settings" },
+	{ top: "ExtensionSettings", key: "BCT", zh: "BCTweaks 设置", en: "BCTweaks settings" },
+	{ top: "OnlineSharedSettings", key: "AFC", zh: "AFC 共享设置（恋人列表/心锁权限）", en: "AFC shared settings (lovers / lock permissions)" },
+	{ top: "OnlineSharedSettings", key: "HSC", zh: "BC-HSC 共享设置（版本/可编辑状态）", en: "BC-HSC shared settings (version / editable state)" },
+	{ top: "OnlineSharedSettings", key: "Ulist", zh: "WCE 用户列表", en: "WCE user list" },
+	{ top: "OnlineSharedSettings", key: "Uwall", zh: "WCE 用户墙", en: "WCE user wall" },
+	{ top: "OnlineSharedSettings", key: "AEEItemFont", zh: "BC-AEE 道具字体选择", en: "BC-AEE item font choice" },
+	{ top: "OnlineSharedSettings", key: "MBS", zh: "MBS 共享设置", en: "MBS shared settings" },
+	{ top: "OnlineSharedSettings", key: "MBSVersion", zh: "MBS 版本标识", en: "MBS version marker" },
+	{ top: "OnlineSharedSettings", key: "WheelFortune", zh: "MBS 幸运轮设置", en: "MBS wheel of fortune settings" },
+	{ top: "OnlineSharedSettings", key: "UBC", zh: "UBC 共享设置/版本标识", en: "UBC shared settings / version marker" },
+	{ top: "OnlineSharedSettings", key: "ItemsAffectExpressions", zh: "UBC 共享设置：道具影响表情", en: "UBC shared settings: items affect expressions" },
+	{ top: "OnlineSharedSettings", key: "DisablePickingLocksOnSelf", zh: "UBC 共享设置：禁止在自己身上开锁", en: "UBC shared settings: disable picking locks on self" },
+	{ top: "OnlineSharedSettings", key: "AllowRename", zh: "UBC 共享设置：允许重命名", en: "UBC shared settings: allow rename" },
+	{ top: "OnlineSharedSettings", key: "AllowPlayerLeashing", zh: "共享设置：允许玩家被牵引", en: "Shared settings: allow player leashing" },
+	{ top: "OnlineSharedSettings", key: "AllowFullWardrobeAccess", zh: "共享设置：允许完整衣柜权限", en: "Shared settings: allow full wardrobe access" },
+	{ top: "OnlineSharedSettings", key: "BlockBodyCosplay", zh: "共享设置：禁止身体 cosplay", en: "Shared settings: block body cosplay" },
+	{ top: "OnlineSettings", key: "ECHO", zh: "Echo 服装/动作扩展设置", en: "Echo clothing/activity extension settings" },
+	{ top: "OnlineSettings", key: "BCX", zh: "BCX 设置（在线设置存储）", en: "BCX settings (online settings storage)" },
+	{ top: "OnlineSettings", key: "BCXDataCleared", zh: "BCX 数据清除标记", en: "BCX data-cleared marker" },
+	{ top: "OnlineSettings", key: "BCT", zh: "BCTweaks 设置（旧版键迁移）", en: "BCTweaks settings (legacy key migration)" },
+	{ top: "OnlineSettings", key: "CRE", zh: "星涟MOD（BCMod）设置", en: "BCMod (XingLian) settings" },
+	{ top: "OnlineSettings", key: "BCE", zh: "WCE 设置（旧版键迁移）", en: "WCE settings (legacy key migration)" },
+	{ top: "OnlineSettings", key: "BCEWardrobe", zh: "WCE 服装代码存储（旧版键迁移）", en: "WCE wardrobe (legacy key migration)" },
+	{ top: "OnlineSettings", key: "EBCH", zh: "EBCH 设置（旧版键迁移）", en: "EBCH settings (legacy key migration)" },
+	{ top: "OnlineSettings", key: "BCAR", zh: "BCAR 设置（旧版键迁移）", en: "BCAR settings (legacy key migration)" },
+	{ top: "OnlineSettings", key: "LSCG", zh: "LSCG 设置（旧版键迁移）", en: "LSCG settings (legacy key migration)" },
+	{ top: "OnlineSettings", key: "BCResponsive", zh: "Responsive 设置（旧版键迁移）", en: "Responsive settings (legacy key migration)" },
+	{ top: "OnlineSettings", key: "BCResponsiveData", zh: "BCResponsive 设置（旧版键迁移）", en: "BCResponsive settings (legacy key migration)" },
+	{ top: "OnlineSettings", key: "EnableAfkTimer", zh: "UBC 设置：启用 AFK 计时器", en: "UBC settings: enable AFK timer" },
+	{ top: "OnlineSettings", key: "RespondRemoteModListQueries", zh: "UBC 设置：响应远程 MOD 列表查询", en: "UBC settings: respond remote mod list queries" },
+	{ top: "OnlineSettings", key: "AutoBanBlackList", zh: "UBC 设置：自动封禁黑名单", en: "UBC settings: auto ban blacklist" },
+	{ top: "OnlineSettings", key: "AutoBanGhostList", zh: "UBC 设置：自动封禁幽灵名单", en: "UBC settings: auto ban ghost list" },
+	{ top: "OnlineSettings", key: "DisableAnimations", zh: "UBC 设置：禁用动画", en: "UBC settings: disable animations" },
+	{ top: "", key: "ECHO_INFO2", zh: "Echo 服装/动作扩展信息", en: "Echo clothing/activity extension info" },
+];
+
+function PSCloudLabel(info) {
+	if (!info) return "?";
+	return PSUI.lang === "en" ? info.en : info.zh;
+}
+
+ 
+function PSCloudKeyLabel(key) {
+	const m = {
+		PlayScriptData: PST("cloudKeyPlayScript"),
+		Description: PST("cloudKeyDescription"),
+		ExtensionSettings: PST("cloudKeyExtensionSettings"),
+		OnlineSharedSettings: PST("cloudKeyOnlineSharedSettings"),
+		Lovership: PST("cloudKeyLovership"),
+		Ownership: PST("cloudKeyOwnership"),
+		PrivateCharacter: PST("cloudKeyPrivateCharacter"),
+	};
+	const topHit = PS_MOD_ACCOUNT_INFO.find((x) => x.top === "" && x.key === key);
+	if (topHit) return PSCloudLabel(topHit);
+	if (m[key]) return m[key];
+	const k = String(key || "");
+	if (k.indexOf("AFC") >= 0) return PST("cloudKeyAFC");
+	if (k.indexOf("HL") >= 0 || k.indexOf("HeartLock") >= 0) return PST("cloudKeyHeartLock");
+	if (k.indexOf("LSCG") >= 0) return PST("cloudKeyLSCG");
+	return PST("cloudKeyOther", k || "?");
+}
+
+ 
+function PSCloudNestedKeyLabel(top, key) {
+	const hit = PS_MOD_ACCOUNT_INFO.find((x) => x.top === top && x.key === key);
+	if (hit) return PSCloudLabel(hit);
+	const k = String(key || "");
+	if (top === "ExtensionSettings") {
+		if (k.indexOf("AFC") >= 0 && k.indexOf("HeartLock") >= 0) return PST("cloudKeyHeartLock");
+		if (k.indexOf("AFC") >= 0) return PST("cloudKeyAFC");
+		if (k.indexOf("FBC") >= 0) return PST("cloudKeyWCE", k);
+		if (k.indexOf("WCE") >= 0) return PST("cloudKeyWCE", k);
+	}
+	if (top === "OnlineSharedSettings") {
+		if (k.indexOf("AFC") >= 0) return PST("cloudKeyAFC");
+	}
+	if (top === "OnlineSettings") {
+		if (k.indexOf("ECHO") >= 0) return PST("cloudKeyEcho", k);
+	}
+	return PST("cloudKeyNested", top + "." + k);
+}
+
+ 
+function PSCloudDetailEntries() {
+	const out = [];
+	const data = PSStore.lastLoginData;
+	if (!data || typeof data !== "object") return out;
+	const src = data;
+	for (const [top, val] of Object.entries(src)) {
+		if ((top === "ExtensionSettings" || top === "OnlineSharedSettings" || top === "OnlineSettings") && val && typeof val === "object") {
+			for (const [k, v] of Object.entries(val)) {
+				out.push({ label: PSCloudNestedKeyLabel(top, k), bytes: PSUTF8Bytes(JSON.stringify(v ?? "")), key: top + "." + k });
+			}
+		} else {
+			out.push({ label: PSCloudKeyLabel(top), bytes: PSUTF8Bytes(JSON.stringify(val ?? "")), key: top });
+		}
+	}
+	out.sort((a, b) => {
+		if (isNaN(a.bytes) && isNaN(b.bytes)) return String(a.key).localeCompare(String(b.key));
+		if (isNaN(a.bytes) || isNaN(b.bytes)) return isNaN(b.bytes) ? -1 : 1;
+		return b.bytes - a.bytes;
+	});
+	return out;
+}
+
+ 
 function PSCloudInfo() {
 	let snap = PSStore.lastAccountSnapshot;
 	if (!snap && PSStore.lastLoginData) {
@@ -4242,6 +4365,23 @@ const PSText = {
 		cloudExtension: "ExtensionSettings",
 		cloudBioUsed: "BIO存储显示",
 		cloudBioUsage: "已用 {0} 字符 / 总量 {1}；本插件 {2} 字符",
+		cloudDetailTitle: "在线存储空间详细",
+		cloudDetailBtn: "在线存储空间详细",
+		cloudDetailNone: "没有账号数据键",
+		cloudKeyPlayScript: "PlayScript（本插件）",
+		cloudKeyDescription: "玩家描述（BIO）",
+		cloudKeyExtensionSettings: "插件扩展设置（ExtensionSettings）",
+		cloudKeyOnlineSharedSettings: "在线共享设置（OnlineSharedSettings）",
+		cloudKeyLovership: "恋人关系（Lovership）",
+		cloudKeyOwnership: "所有权/主人关系（Ownership）",
+		cloudKeyPrivateCharacter: "私有角色（PrivateCharacter）",
+		cloudKeyAFC: "AFC 扩展恋人",
+		cloudKeyHeartLock: "HeartLock 心锁",
+		cloudKeyLSCG: "LSCG",
+		cloudKeyWCE: "WCE（{0}）",
+		cloudKeyEcho: "Echo（{0}）",
+		cloudKeyNested: "{0}",
+		cloudKeyOther: "其他（{0}）",
 		cloudAccountMissing: "未登录：暂无账号数据",
 		cloudAccountPartial: "账号快照缺失：重连或下次登录前加载本插件后补全",
 		cloudInfo: "在线存储：账号数据共 {0}K / 上限 {5}K，可用 {1}K；本插件占用 {2}K（上限 {3}K）；ExtensionSettings {4}K",
@@ -4551,6 +4691,23 @@ const PSText = {
 		cloudExtension: "ExtensionSettings",
 		cloudBioUsed: "BIO storage display",
 		cloudBioUsage: "Used {0} chars / limit {1}; this plugin {2} chars",
+		cloudDetailTitle: "Online storage details",
+		cloudDetailBtn: "Online storage details",
+		cloudDetailNone: "No account data keys",
+		cloudKeyPlayScript: "PlayScript (this plugin)",
+		cloudKeyDescription: "Player description (BIO)",
+		cloudKeyExtensionSettings: "Plugin extension settings",
+		cloudKeyOnlineSharedSettings: "Online shared settings",
+		cloudKeyLovership: "Lovership",
+		cloudKeyOwnership: "Ownership",
+		cloudKeyPrivateCharacter: "Private character",
+		cloudKeyAFC: "AFC extended lovers",
+		cloudKeyHeartLock: "HeartLock",
+		cloudKeyLSCG: "LSCG",
+		cloudKeyWCE: "WCE ({0})",
+		cloudKeyEcho: "Echo ({0})",
+		cloudKeyNested: "{0}",
+		cloudKeyOther: "Other ({0})",
 		cloudAccountMissing: "Not logged in: no account data",
 		cloudAccountPartial: "Account snapshot missing: reconnect or load this plugin before your next login",
 		cloudInfo: "Online storage: account data {0}K / {5}K limit, {1}K available; this plugin uses {2}K (cap {3}K); ExtensionSettings {4}K",
@@ -4622,6 +4779,7 @@ const PSUI = {
 	countScriptId: null, countNodeId: null, countValueEl: null,
 	connectWin: null, connectTitleEl: null, connectListEl: null, connectScriptId: null, connectNodeId: null, connectPort: "next",
 	cloudWin: null, cloudTitleEl: null, cloudBodyEl: null,
+	cloudDetailWin: null, cloudDetailTitleEl: null, cloudDetailBodyEl: null,
 	warnWin: null, warnTitleEl: null, warnBodyEl: null,
 	dot: null,
 	toastEl: null, toastTimer: null,
@@ -7909,6 +8067,69 @@ function PSUICloudWinClose() {
 	if (PSUI.cloudWin) PSUI.cloudWin.style.display = "none";
 }
 
+ 
+
+function PSUICloudDetailWinBuild() {
+	if (PSUI.cloudDetailWin || typeof document === "undefined" || !document.body) return;
+	const win = document.createElement("div");
+	win.id = "ps-clouddetailwin";
+	PSStyle(win, {
+		position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
+		width: "520px", maxHeight: "80vh", zIndex: "2147483570", background: PS_BG,
+		border: "2px solid #ffffff", borderRadius: "10px",
+		boxShadow: "0 8px 40px rgba(0,0,0,.7)", display: "none",
+		color: PS_TEXT, fontFamily: "sans-serif", fontSize: "14px", overflow: "hidden",
+	});
+	const title = PSEl("div", { display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", background: "#141826", borderBottom: "1px solid " + PS_BORDER, userSelect: "none" });
+	title.appendChild(PSEl("span", { color: PS_ACCENT, fontSize: "16px" }, "▶"));
+	PSUI.cloudDetailTitleEl = PSEl("span", { fontWeight: "700", fontSize: "14px", flex: "1" });
+	title.appendChild(PSUI.cloudDetailTitleEl);
+	title.appendChild(PSSmallBtn("✕", PSUICloudDetailWinClose, { title: PST("closeTitle") }));
+	win.appendChild(title);
+	PSUI.cloudDetailBodyEl = PSEl("div", { padding: "12px 14px", overflowY: "auto", maxHeight: "calc(80vh - 44px)" });
+	win.appendChild(PSUI.cloudDetailBodyEl);
+	document.body.appendChild(win);
+	PSUI.cloudDetailWin = win;
+}
+
+function PSUICloudDetailWinOpen() {
+	PSUICloudDetailWinBuild();
+	if (!PSUI.cloudDetailWin) return;
+	PSUI.cloudDetailWin.style.display = "block";
+	PSUICloudDetailWinRender();
+}
+
+function PSUICloudDetailWinClose() {
+	if (PSUI.cloudDetailWin) PSUI.cloudDetailWin.style.display = "none";
+}
+
+function PSUICloudDetailWinRender() {
+	const box = PSUI.cloudDetailBodyEl;
+	if (!box) return;
+	box.innerHTML = "";
+	if (PSUI.cloudDetailTitleEl) PSUI.cloudDetailTitleEl.textContent = PST("cloudDetailTitle");
+	const loggedIn = typeof Player !== "undefined" && Player && typeof Player.CharacterID === "string" && Player.CharacterID !== "";
+	const kb = (n) => (isFinite(Number(n)) ? (PSByteToKB(Number(n)) + "K") : "—");
+	const row = (label, value, dim) => {
+		const r = PSEl("div", { display: "flex", gap: "10px", padding: "7px 0", borderBottom: "1px solid " + PS_BORDER, fontSize: "13px" });
+		const l = PSEl("div", { width: "200px", minWidth: "200px", color: PS_TEXT_DIM, wordBreak: "break-all" });
+		l.textContent = label;
+		r.appendChild(l);
+		const v = PSEl("div", { flex: "1", textAlign: "right", color: dim ? PS_TEXT_DIM : PS_TEXT, wordBreak: "break-all" });
+		v.textContent = value;
+		r.appendChild(v);
+		box.appendChild(r);
+	};
+	const entries = PSCloudDetailEntries();
+	if (entries.length) {
+		for (const e of entries) {
+			row(e.label, kb(e.bytes) + "（" + (isFinite(Number(e.bytes)) ? e.bytes + " 字节" : "—") + "）", true);
+		}
+	} else {
+		row(PST("cloudDetailNone"), loggedIn ? PST("cloudAccountPartial") : PST("cloudAccountMissing"), true);
+	}
+}
+
 function PSUICloudWinRender() {
 	const box = PSUI.cloudBodyEl;
 	if (!box) return;
@@ -7935,6 +8156,12 @@ function PSUICloudWinRender() {
 	row(PST("cloudSelfUsed"), kb(info.self) + (info.capKB ? "（" + PST("cloudSelfCap", info.capKB) + "）" : ""));
 	row(PST("cloudExtension"), kb(info.extensionBytes) + "（" + info.extensionChars + " 字符）");
 	row(PST("cloudBioUsed"), bio.used == null ? "—" : PST("cloudBioUsage", bio.used, bio.total, bio.pluginUsed == null ? "—" : bio.pluginUsed));
+
+	
+	const detailBtn = PSSmallBtn(PST("cloudDetailBtn"), PSUICloudDetailWinOpen);
+	detailBtn.style.width = "100%";
+	detailBtn.style.marginTop = "10px";
+	box.appendChild(detailBtn);
 }
 
 function PSUIRenderAll() {
@@ -7945,6 +8172,7 @@ function PSUIRenderAll() {
 	PSUIEditorBuild();
 	PSUIRenderStatus();
 	if (PSUI.cloudWin && PSUI.cloudWin.style.display !== "none") PSUICloudWinRender();
+	if (PSUI.cloudDetailWin && PSUI.cloudDetailWin.style.display !== "none") PSUICloudDetailWinRender();
 	
 	if (PSUI.langBtnEl) PSUI.langBtnEl.textContent = PST("langBtn");
 	if (PSUI.titleText) PSUI.titleText.textContent = PST("title");
@@ -8137,7 +8365,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSUIJudgePreview, PSUIConnectWinOpen, PSUIConnectWinClose,
 		PlayScriptOpen, PlayScriptClose, PlayScriptToggle,
 		PSVersion: () => PS_VERSION, PSLastOutfitBlocked: () => PSLastOutfitBlocked.slice(), PSLastOutfitCleared: () => PSLastOutfitCleared.slice(),
-		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSCloudBioUsage, PSCloudScriptIds, PSScriptIsCloud, PSScriptStorage, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
+		PSStorageInfo, PSCleanLSCGBackups, PSCloudInfo, PSCloudLimit, PSCloudSelfBytes, PSCloudBioUsage, PSCloudScriptIds, PSScriptIsCloud, PSScriptStorage, PSCloudKeyLabel, PSCloudDetailEntries, PSObfuscate, PSDeobfuscate, PSBioPack, PSBioUnpack, PSBioBlockBounds, PSUTF8Bytes, PSMeasureDataSize, PSByteToKB,
 		PSDebugOutfit: (code) => {
 			const bundle = PSDecodeOutfitCode(PSNormalizeCode(code));
 			if (!bundle) return { version: PS_VERSION, error: "decode-failed" };
