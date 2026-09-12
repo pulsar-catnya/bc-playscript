@@ -8296,6 +8296,10 @@ function PSCloudDetailRestore(e, value) {
 			if (sub) {
 				if (!Player[top] || typeof Player[top] !== "object") Player[top] = {};
 				Player[top][sub] = value;
+			} else if (top === "Description") {
+				
+				const dec = PSCloudDetailDecode(value);
+				Player.Description = (typeof dec.value === "string") ? dec.value : String(dec.value ?? "");
 			} else {
 				Player[top] = value;
 			}
@@ -8305,6 +8309,9 @@ function PSCloudDetailRestore(e, value) {
 				if (top === "ExtensionSettings" && sub) {
 					if (typeof ServerPlayerExtensionSettingsSync === "function") ServerPlayerExtensionSettingsSync(sub);
 					else ServerAccountUpdate.QueueData({ ExtensionSettings: Player.ExtensionSettings });
+				} else if (top === "Description") {
+					
+					ServerAccountUpdate.QueueData({ Description: value });
 				} else if (top === "OnlineSettings" || top === "OnlineSharedSettings") {
 					ServerAccountUpdate.QueueData({ [top]: Player[top] });
 				} else {
