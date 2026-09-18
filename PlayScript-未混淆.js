@@ -3022,6 +3022,48 @@ function PSDecodeOutfitCode(code) {
 }
 
  
+function PSOutfitRemoveDependents(C, removed, fromSelf, params) {
+	if (!C || !Array.isArray(C.Appearance) || !Array.isArray(removed) || !removed.length) return [];
+	const removedSet = new Set();
+	const queue = removed.slice();
+	while (queue.length) {
+		const parent = queue.shift();
+		const list = (parent && parent.Asset && Array.isArray(parent.Asset.RemoveItemOnRemove)) ? parent.Asset.RemoveItemOnRemove : null;
+		if (!list || !list.length) continue;
+		for (const spec of list) {
+			if (!spec || typeof spec.Group !== "string") continue;
+			const idx = C.Appearance.findIndex((x) => {
+				if (!x || !x.Asset || !x.Asset.Group || x.Asset.Group.Name !== spec.Group) return false;
+				if (spec.Name && x.Asset.Name !== spec.Name) return false;
+				if (spec.TypeRecord) {
+					try {
+						if (typeof CommonObjectIsSubset === "function" && !CommonObjectIsSubset(spec.TypeRecord, (x.Property && x.Property.TypeRecord) || {})) return false;
+					} catch (e) { return false; }
+				}
+				return true;
+			});
+			if (idx < 0) continue;
+			const it = C.Appearance[idx];
+			if (removedSet.has(it)) continue;
+			if (!fromSelf) {
+				const locked = !!(it.Property && (it.Property.Lock || it.Property.LockedBy));
+				if (locked) continue;
+				if (params && typeof ValidationCanRemoveItem === "function") {
+					let ok = false;
+					try { ok = !!ValidationCanRemoveItem(it, params, true); } catch (e) { ok = false; }
+					if (!ok) continue;
+				}
+			}
+			removedSet.add(it);
+			queue.push(it);
+		}
+	}
+	if (!removedSet.size) return [];
+	C.Appearance = C.Appearance.filter((x) => !removedSet.has(x));
+	return Array.from(removedSet);
+}
+
+ 
 function PSApplyOutfit(C, bundle, opts) {
 	opts = opts || {};
 	
@@ -3053,18 +3095,21 @@ function PSApplyOutfit(C, bundle, opts) {
 		try {
 			const groups = new Set(bundle.filter((b) => b && typeof b.Group === "string").map((b) => b.Group));
 			const kept = [];
+			const removed = [];
 			for (const it of C.Appearance) {
 				if (it && it.Asset && it.Asset.Group && groups.has(it.Asset.Group.Name)) {
 					if (addOnlyItemGroups.has(it.Asset.Group.Name)) { kept.push(it); continue; }   
 					const locked = !!(it.Property && (it.Property.Lock || it.Property.LockedBy));
 					if (locked && !fromSelf) { kept.push(it); continue; }   
-					if (ValidationCanRemoveItem(it, params, true)) continue;   
+					if (ValidationCanRemoveItem(it, params, true)) { removed.push(it); continue; }   
 					kept.push(it);
 				} else {
 					kept.push(it);
 				}
 			}
 			C.Appearance = kept;
+			
+			PSOutfitRemoveDependents(C, removed, fromSelf, params);
 			didPreremove = true;
 		} catch (e) {   }
 	}
@@ -8583,7 +8628,7 @@ if (typeof module !== "undefined" && module.exports) {
 		PSExportJSON, PSExportScriptJSON, PSImportJSON, PSClearAll,
 		PSNormalizeText, PSNodeTextCap, PSNormalizeCode, PSSendChat, PSSendRp, PSSendNarr, PSSendAction, PSSendNode,
 		PSSendLeave, PSSendOutfit,
-		PSDecodeOutfitCode, PSApplyOutfit, PSOutfitClassOf, PSOutfitFlagsFromNode, PSOutfitClassAllowed, PSOutfitPrepareBundle,
+		PSDecodeOutfitCode, PSApplyOutfit, PSOutfitRemoveDependents, PSOutfitClassOf, PSOutfitFlagsFromNode, PSOutfitClassAllowed, PSOutfitPrepareBundle,
 		PSSendEmoteDirect, PSEmoteBlocked, PSChatReplyId,
 		PS_NICK_TOKEN, PSCharDisplayName, PSCharObjectOf, PSTriggerName, PSApplyTokens,
 		PS_TARGET_TOKEN, PSCharIsSelf, PSTargetInRoom,
